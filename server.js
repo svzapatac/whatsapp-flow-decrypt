@@ -13,12 +13,7 @@ app.post('/decrypt', (req, res) => {
 
     const encryptedAesKey = Buffer.from(body.encrypted_aes_key, 'base64');
     const encryptedFlowData = Buffer.from(body.encrypted_flow_data, 'base64');
-    let initialVector = Buffer.from(body.initial_vector, 'base64');
-
-    // WhatsApp envía IV de 16 bytes pero AES-GCM necesita 12
-    if (initialVector.length === 16) {
-      initialVector = initialVector.subarray(0, 12);
-    }
+    const initialVector = Buffer.from(body.initial_vector, 'base64');
 
     // 1. Descifra la AES key con RSA-OAEP
     const decryptedAesKey = crypto.privateDecrypt(
@@ -36,6 +31,7 @@ app.post('/decrypt', (req, res) => {
     const authTag = encryptedFlowData.subarray(encryptedFlowData.length - TAG_LENGTH);
 
     // 3. Descifra con AES-128-GCM
+    // Usamos el IV tal como viene (16 bytes) para descifrar
     const decipher = crypto.createDecipheriv('aes-128-gcm', decryptedAesKey, initialVector);
     decipher.setAuthTag(authTag);
 
@@ -49,7 +45,7 @@ app.post('/decrypt', (req, res) => {
     res.json({
       ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
-      _iv: initialVector.toString('base64'), // Guardamos el IV de 12 bytes
+      _iv: initialVector.toString('base64'), // Devolvemos el IV original de 16 bytes
     });
   } catch (error) {
     console.error('Decrypt error:', error);
@@ -63,8 +59,14 @@ app.post('/encrypt', (req, res) => {
     const body = req.body;
 
     const aesKey = Buffer.from(body.aesKey, 'base64');
-    const iv = Buffer.from(body.iv, 'base64');
+    let iv = Buffer.from(body.iv, 'base64');
     const responseData = body.data;
+
+    // Para cifrar, AES-GCM requiere IV de 12 bytes
+    // Si viene de 16 bytes, truncamos a 12
+    if (iv.length === 16) {
+      iv = iv.subarray(0, 12);
+    }
 
     // IV de respuesta: invertir último byte
     const responseIv = Buffer.from(iv);
