@@ -103,7 +103,7 @@ app.post('/flow', async (req, res) => {
     // 4. Lógica según la acción
     switch (decryptedBody.action) {
       case 'ping':
-        responseData = { status: 'ok' };
+        responseData = { data: { status: 'active' } };
         break;
 
       case 'data_exchange': {
