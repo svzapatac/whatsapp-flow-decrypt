@@ -70,12 +70,14 @@ function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
 
 // ==================== ENDPOINT PRINCIPAL ====================
 app.post('/flow', async (req, res) => {
+  let decryptedAesKey, initialVector;
+
   try {
     const body = req.body;
 
     // 1. Descifrar AES key con RSA
     const encryptedAesKey = Buffer.from(body.encrypted_aes_key, 'base64');
-    const decryptedAesKey = crypto.privateDecrypt(
+    decryptedAesKey = crypto.privateDecrypt(
       {
         key: PRIVATE_KEY,
         padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
@@ -86,7 +88,7 @@ app.post('/flow', async (req, res) => {
 
     // 2. Preparar IV y datos encriptados
     const encryptedFlowData = Buffer.from(body.encrypted_flow_data, 'base64');
-    const initialVector = Buffer.from(body.initial_vector, 'base64');
+    initialVector = Buffer.from(body.initial_vector, 'base64');
 
     // 3. Descifrar payload
     const decryptedJSON = decryptAES(encryptedFlowData, decryptedAesKey, initialVector);
@@ -104,10 +106,11 @@ app.post('/flow', async (req, res) => {
         responseData = { status: 'ok' };
         break;
 
-      case 'data_exchange':
+      case 'data_exchange': {
         const trigger = decryptedBody.data?.trigger;
 
         if (trigger === 'consultar_disponibilidad') {
+          // Consultar Google Calendar - próximos 14 días
           const now = new Date();
           const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
 
@@ -119,17 +122,19 @@ app.post('/flow', async (req, res) => {
             orderBy: 'startTime',
           });
 
+          // Agrupar eventos por fecha y hora
           const reservasPorFechaHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
             const fecha = start.toISOString().split('T')[0];
             const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
-            
+
             if (!reservasPorFechaHora[fecha]) reservasPorFechaHora[fecha] = {};
             if (!reservasPorFechaHora[fecha][hora]) reservasPorFechaHora[fecha][hora] = 0;
             reservasPorFechaHora[fecha][hora]++;
           });
 
+          // Generar fechas disponibles
           const fechasDisponibles = [];
           for (let i = 0; i < 14; i++) {
             const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
@@ -138,14 +143,17 @@ app.post('/flow', async (req, res) => {
 
             let slotsDelDia = [];
             if (diaSemana === 0) {
+              // Domingo: 12:00-13:30 y 16:30-19:00
               slotsDelDia = [
                 ...generarSlots('12:00', '13:30'),
                 ...generarSlots('16:30', '19:00')
               ];
             } else {
+              // Lunes a Sábado: 12:00-21:00
               slotsDelDia = generarSlots('12:00', '21:00');
             }
 
+            // Filtrar slots con menos de 20 reservas
             const slotsDisponibles = slotsDelDia.filter(slot => {
               const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
               return reservas < 20;
@@ -176,6 +184,7 @@ app.post('/flow', async (req, res) => {
           const date = new Date(fechaSeleccionada + 'T00:00:00');
           const diaSemana = date.getDay();
 
+          // Consultar eventos para esa fecha
           const inicioDia = new Date(date);
           inicioDia.setHours(0, 0, 0, 0);
           const finDia = new Date(date);
@@ -227,6 +236,7 @@ app.post('/flow', async (req, res) => {
           responseData = { error: 'Trigger desconocido: ' + trigger };
         }
         break;
+      }
 
       case 'complete':
         console.log('=== RESERVA CONFIRMADA ===');
@@ -242,24 +252,26 @@ app.post('/flow', async (req, res) => {
         responseData = { error: 'Acción desconocida: ' + decryptedBody.action };
     }
 
-    // 5. Preparar IV de respuesta
+    // 5. Preparar IV de respuesta (invertir el último byte, según spec de Meta)
     const responseIv = Buffer.from(initialVector.subarray(0, 12));
     responseIv[responseIv.length - 1] ^= 1;
 
     // 6. Encriptar respuesta
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
 
-    console.log('=== RESPONSE ===');
+    console.log('=== RESPONSE DEBUG ===');
     console.log('encryptedResponse length:', encryptedResponse.length);
     console.log('First 50 chars:', encryptedResponse.substring(0, 50));
 
-    res.json({
-      encrypted_response: encryptedResponse
-    });
+    // IMPORTANTE: Meta espera el string Base64 "pelado" como body,
+    // NO envuelto en JSON. Por eso usamos text/plain + res.send().
+    res.set('Content-Type', 'text/plain');
+    res.send(encryptedResponse);
 
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: error.message, stack: error.stack });
+  } catch (err) {
+    console.error('=== ERROR EN /flow ===');
+    console.error(err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
 
