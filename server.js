@@ -15,6 +15,12 @@ app.post('/decrypt', (req, res) => {
     const encryptedFlowData = Buffer.from(body.encrypted_flow_data, 'base64');
     const initialVector = Buffer.from(body.initial_vector, 'base64');
 
+    console.log('=== DECRYPT ===');
+    console.log('AES Key length:', encryptedAesKey.length);
+    console.log('Flow Data length:', encryptedFlowData.length);
+    console.log('IV length:', initialVector.length);
+    console.log('IV hex:', initialVector.toString('hex'));
+
     // 1. Descifra la AES key con RSA-OAEP
     const decryptedAesKey = crypto.privateDecrypt(
       {
@@ -24,13 +30,14 @@ app.post('/decrypt', (req, res) => {
       },
       encryptedAesKey
     );
+    console.log('Decrypted AES Key length:', decryptedAesKey.length);
 
     // 2. Extrae auth tag (últimos 16 bytes)
     const TAG_LENGTH = 16;
     const encryptedBody = encryptedFlowData.subarray(0, encryptedFlowData.length - TAG_LENGTH);
     const authTag = encryptedFlowData.subarray(encryptedFlowData.length - TAG_LENGTH);
 
-    // 3. Descifra con AES-128-GCM (usando IV de 16 bytes como viene)
+    // 3. Descifra con AES-128-GCM
     const decipher = crypto.createDecipheriv('aes-128-gcm', decryptedAesKey, initialVector);
     decipher.setAuthTag(authTag);
 
@@ -41,13 +48,13 @@ app.post('/decrypt', (req, res) => {
 
     const decryptedBody = JSON.parse(decryptedJSON);
 
-    // Truncar IV a 12 bytes para usar en la respuesta
+    // Truncar IV a 12 bytes para la respuesta
     const iv12 = initialVector.subarray(0, 12);
 
     res.json({
       ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
-      _iv: iv12.toString('base64'), // Devolvemos IV de 12 bytes
+      _iv: iv12.toString('base64'),
     });
   } catch (error) {
     console.error('Decrypt error:', error);
@@ -60,13 +67,23 @@ app.post('/encrypt', (req, res) => {
   try {
     const body = req.body;
 
+    console.log('=== ENCRYPT ===');
+    console.log('Request body:', JSON.stringify(body, null, 2));
+
     const aesKey = Buffer.from(body.aesKey, 'base64');
     const iv = Buffer.from(body.iv, 'base64');
     const responseData = body.data;
 
+    console.log('AES Key length:', aesKey.length);
+    console.log('IV length:', iv.length);
+    console.log('IV hex:', iv.toString('hex'));
+
     // IV de respuesta: invertir último byte
     const responseIv = Buffer.from(iv);
     responseIv[responseIv.length - 1] ^= 1;
+
+    console.log('Response IV length:', responseIv.length);
+    console.log('Response IV hex:', responseIv.toString('hex'));
 
     // Preparar respuesta para el Flow
     const responseObject = {
@@ -74,6 +91,8 @@ app.post('/encrypt', (req, res) => {
       screen: responseData.screen || "DATOS",
       data: responseData.data || {}
     };
+
+    console.log('Response object:', JSON.stringify(responseObject));
 
     // Cifrar con AES-128-GCM
     const cipher = crypto.createCipheriv('aes-128-gcm', aesKey, responseIv);
@@ -86,10 +105,13 @@ app.post('/encrypt', (req, res) => {
     // Concatenar y convertir a base64
     const finalResponse = Buffer.concat([encrypted, authTag]).toString('base64');
 
+    console.log('Encrypted response length:', finalResponse.length);
+
     res.json({ response: finalResponse });
   } catch (error) {
     console.error('Encrypt error:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Stack:', error.stack);
+    res.status(500).json({ error: error.message, stack: error.stack });
   }
 });
 
