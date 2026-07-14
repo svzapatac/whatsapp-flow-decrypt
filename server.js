@@ -108,7 +108,6 @@ app.post('/flow', async (req, res) => {
         const trigger = decryptedBody.data?.trigger;
 
         if (trigger === 'consultar_disponibilidad') {
-          // Consultar Google Calendar - próximos 14 días
           const now = new Date();
           const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
 
@@ -120,7 +119,6 @@ app.post('/flow', async (req, res) => {
             orderBy: 'startTime',
           });
 
-          // Agrupar eventos por fecha y hora
           const reservasPorFechaHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
@@ -132,7 +130,6 @@ app.post('/flow', async (req, res) => {
             reservasPorFechaHora[fecha][hora]++;
           });
 
-          // Generar fechas disponibles
           const fechasDisponibles = [];
           for (let i = 0; i < 14; i++) {
             const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
@@ -141,17 +138,14 @@ app.post('/flow', async (req, res) => {
 
             let slotsDelDia = [];
             if (diaSemana === 0) {
-              // Domingo: 12:00-13:30 y 16:30-19:00
               slotsDelDia = [
                 ...generarSlots('12:00', '13:30'),
                 ...generarSlots('16:30', '19:00')
               ];
             } else {
-              // Lunes a Sábado: 12:00-21:00
               slotsDelDia = generarSlots('12:00', '21:00');
             }
 
-            // Filtrar slots con menos de 20 reservas
             const slotsDisponibles = slotsDelDia.filter(slot => {
               const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
               return reservas < 20;
@@ -182,7 +176,6 @@ app.post('/flow', async (req, res) => {
           const date = new Date(fechaSeleccionada + 'T00:00:00');
           const diaSemana = date.getDay();
 
-          // Consultar eventos para esa fecha
           const inicioDia = new Date(date);
           inicioDia.setHours(0, 0, 0, 0);
           const finDia = new Date(date);
@@ -255,17 +248,20 @@ app.post('/flow', async (req, res) => {
 
     // 6. Encriptar respuesta
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
-    
-    console.log('=== RESPONSE DEBUG ===');
-    console.log('encryptedResponse:', encryptedResponse);
+
+    console.log('=== RESPONSE ===');
     console.log('encryptedResponse length:', encryptedResponse.length);
-    console.log('encryptedResponse type:', typeof encryptedResponse);
-    console.log('Is empty:', !encryptedResponse);
     console.log('First 50 chars:', encryptedResponse.substring(0, 50));
 
     res.json({
       encrypted_response: encryptedResponse
     });
+
+  } catch (error) {
+    console.error('Error:', error);
+    res.status(500).json({ error: error.message, stack: error.stack });
+  }
+});
 
 // ==================== HEALTH CHECK ====================
 app.get('/', (req, res) => {
