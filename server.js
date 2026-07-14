@@ -4,17 +4,21 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json());
 
-// Lee la llave desde Base64
 const PRIVATE_KEY = Buffer.from(process.env.PRIVATE_KEY_B64, 'base64').toString('utf-8');
 
-// ========== ENDPOINT: DESCIFRAR (ya funciona) ==========
+// ========== ENDPOINT: DESCIFRAR ==========
 app.post('/decrypt', (req, res) => {
   try {
     const body = req.body;
 
     const encryptedAesKey = Buffer.from(body.encrypted_aes_key, 'base64');
     const encryptedFlowData = Buffer.from(body.encrypted_flow_data, 'base64');
-    const initialVector = Buffer.from(body.initial_vector, 'base64');
+    let initialVector = Buffer.from(body.initial_vector, 'base64');
+
+    // WhatsApp envía IV de 16 bytes pero AES-GCM necesita 12
+    if (initialVector.length === 16) {
+      initialVector = initialVector.subarray(0, 12);
+    }
 
     // 1. Descifra la AES key con RSA-OAEP
     const decryptedAesKey = crypto.privateDecrypt(
@@ -45,7 +49,7 @@ app.post('/decrypt', (req, res) => {
     res.json({
       ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
-      _iv: initialVector.toString('base64'),
+      _iv: initialVector.toString('base64'), // Guardamos el IV de 12 bytes
     });
   } catch (error) {
     console.error('Decrypt error:', error);
@@ -59,25 +63,12 @@ app.post('/encrypt', (req, res) => {
     const body = req.body;
 
     const aesKey = Buffer.from(body.aesKey, 'base64');
-    let iv = Buffer.from(body.iv, 'base64');
+    const iv = Buffer.from(body.iv, 'base64');
     const responseData = body.data;
-
-    // Asegurar que el IV sea de 12 bytes (AES-GCM standard)
-    if (iv.length !== 12) {
-      // Si el IV es de 16 bytes, tomamos solo los primeros 12
-      // o si es más corto, lo ajustamos
-      console.log(`IV length: ${iv.length}, adjusting to 12 bytes`);
-      if (iv.length > 12) {
-        iv = iv.subarray(0, 12);
-      }
-    }
 
     // IV de respuesta: invertir último byte
     const responseIv = Buffer.from(iv);
     responseIv[responseIv.length - 1] ^= 1;
-
-    console.log('Original IV length:', iv.length);
-    console.log('Response IV length:', responseIv.length);
 
     // Preparar respuesta para el Flow
     const responseObject = {
@@ -100,6 +91,9 @@ app.post('/encrypt', (req, res) => {
     res.json({ response: finalResponse });
   } catch (error) {
     console.error('Encrypt error:', error);
-    res.status(500).json({ error: error.message, stack: error.stack });
+    res.status(500).json({ error: error.message });
   }
 });
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
