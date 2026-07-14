@@ -7,11 +7,9 @@ app.use(express.json());
 
 // ==================== CONFIGURACIÓN ====================
 const PRIVATE_KEY = Buffer.from(process.env.PRIVATE_KEY_B64, 'base64').toString('utf-8');
-
-// Google Calendar - Service Account
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
-const CALENDAR_ID = process.env.CALENDAR_ID || 'primary';
+const CALENDAR_ID = process.env.CALENDAR_ID || 'potrillosterraza@gmail.com';
 
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
@@ -47,7 +45,6 @@ function encryptAES(data, aesKey, iv) {
   return Buffer.concat([encrypted, authTag]).toString('base64');
 }
 
-// Generar slots de 30 minutos
 function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
   const slots = [];
   let [h, m] = horaInicio.split(':').map(Number);
@@ -140,11 +137,9 @@ app.post('/flow', async (req, res) => {
           for (let i = 0; i < 14; i++) {
             const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
             const dateStr = date.toISOString().split('T')[0];
-            const diaSemana = date.getDay(); // 0=Domingo, 1=Lunes, ..., 6=Sábado
+            const diaSemana = date.getDay();
 
-            // Determinar si hay slots disponibles para esta fecha
             let slotsDelDia = [];
-            
             if (diaSemana === 0) {
               // Domingo: 12:00-13:30 y 16:30-19:00
               slotsDelDia = [
@@ -156,7 +151,7 @@ app.post('/flow', async (req, res) => {
               slotsDelDia = generarSlots('12:00', '21:00');
             }
 
-            // Filtrar slots que ya tienen 20 reservas
+            // Filtrar slots con menos de 20 reservas
             const slotsDisponibles = slotsDelDia.filter(slot => {
               const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
               return reservas < 20;
@@ -177,7 +172,7 @@ app.post('/flow', async (req, res) => {
               nombre_festejado: decryptedBody.data.nombre_festejado,
               numero_personas: decryptedBody.data.numero_personas,
               fechas_disponibles: fechasDisponibles,
-              horarios_disponibles: [] // Se llenará cuando elija fecha
+              horarios_disponibles: []
             }
           };
         }
@@ -187,7 +182,7 @@ app.post('/flow', async (req, res) => {
           const date = new Date(fechaSeleccionada + 'T00:00:00');
           const diaSemana = date.getDay();
 
-          // Consultar eventos para esa fecha específica
+          // Consultar eventos para esa fecha
           const inicioDia = new Date(date);
           inicioDia.setHours(0, 0, 0, 0);
           const finDia = new Date(date);
@@ -201,7 +196,6 @@ app.post('/flow', async (req, res) => {
             orderBy: 'startTime',
           });
 
-          // Contar reservas por hora
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
@@ -210,20 +204,16 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          // Generar slots según el día
           let slotsDelDia = [];
           if (diaSemana === 0) {
-            // Domingo
             slotsDelDia = [
               ...generarSlots('12:00', '13:30'),
               ...generarSlots('16:30', '19:00')
             ];
           } else {
-            // Lunes a Sábado
             slotsDelDia = generarSlots('12:00', '21:00');
           }
 
-          // Filtrar slots con menos de 20 reservas
           const horariosDisponibles = slotsDelDia.filter(slot => {
             const reservas = reservasPorHora[slot.id] || 0;
             return reservas < 20;
@@ -259,7 +249,7 @@ app.post('/flow', async (req, res) => {
         responseData = { error: 'Acción desconocida: ' + decryptedBody.action };
     }
 
-    // 5. Preparar IV de respuesta (invertir último byte)
+    // 5. Preparar IV de respuesta
     const responseIv = Buffer.from(initialVector.subarray(0, 12));
     responseIv[responseIv.length - 1] ^= 1;
 
