@@ -4,7 +4,40 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json());
 
-const PRIVATE_KEY = process.env.PRIVATE_KEY;
+// Función para formatear la llave correctamente
+function formatPrivateKey(key) {
+  // Si la llave tiene espacios en lugar de saltos de línea, los reemplazamos
+  // Pero primero verificamos si ya tiene el formato correcto
+  if (key.includes('-----BEGIN PRIVATE KEY-----')) {
+    // Reemplazar espacios que no sean saltos de línea entre las partes de la llave
+    // La llave PEM debe tener saltos de línea cada 64 caracteres aprox
+    
+    // Si no tiene saltos de línea después del header, los agregamos
+    let formatted = key
+      .replace(/-----BEGIN PRIVATE KEY----- /, '-----BEGIN PRIVATE KEY-----\n')
+      .replace(/ -----END PRIVATE KEY-----/, '\n-----END PRIVATE KEY-----');
+    
+    // Si la llave está en una sola línea (sin saltos), intentamos formatearla
+    if (!formatted.includes('\n')) {
+      const header = '-----BEGIN PRIVATE KEY-----';
+      const footer = '-----END PRIVATE KEY-----';
+      const body = formatted
+        .replace(header, '')
+        .replace(footer, '')
+        .trim()
+        .replace(/\s+/g, ''); // quitar todos los espacios del body
+      
+      // Insertar saltos de línea cada 64 caracteres
+      const formattedBody = body.match(/.{1,64}/g).join('\n');
+      formatted = `${header}\n${formattedBody}\n${footer}`;
+    }
+    
+    return formatted;
+  }
+  return key;
+}
+
+const PRIVATE_KEY = formatPrivateKey(process.env.PRIVATE_KEY);
 
 app.post('/decrypt', (req, res) => {
   try {
@@ -46,6 +79,7 @@ app.post('/decrypt', (req, res) => {
       _iv: initialVector.toString('base64'),
     });
   } catch (error) {
+    console.error('Error:', error);
     res.status(500).json({ error: error.message });
   }
 });
