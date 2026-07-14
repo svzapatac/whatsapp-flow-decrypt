@@ -41,12 +41,14 @@ app.post('/decrypt', (req, res) => {
 
     const decryptedBody = JSON.parse(decryptedJSON);
 
+    // APLANA decryptedBody en la raíz del JSON con ...decryptedBody
     res.json({
-      decryptedBody,
+      ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
       _iv: initialVector.toString('base64'),
     });
   } catch (error) {
+    console.error('Full error:', error);
     res.status(500).json({ error: error.message });
   }
 });
