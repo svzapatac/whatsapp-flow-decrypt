@@ -252,9 +252,9 @@ app.post('/flow', async (req, res) => {
         responseData = { error: 'Acción desconocida: ' + decryptedBody.action };
     }
 
-    // 5. Preparar IV de respuesta (invertir el último byte, según spec de Meta)
-    const responseIv = Buffer.from(initialVector.subarray(0, 12));
-    responseIv[responseIv.length - 1] ^= 1;
+    // 5. Preparar IV de respuesta: invertir TODOS los bits del IV original
+    // (spec de Meta: "flip all bits of the IV used to decrypt the request")
+    const responseIv = Buffer.from(initialVector.map(byte => ~byte & 0xFF));
 
     // 6. Encriptar respuesta
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
