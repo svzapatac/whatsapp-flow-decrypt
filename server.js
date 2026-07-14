@@ -30,8 +30,7 @@ app.post('/decrypt', (req, res) => {
     const encryptedBody = encryptedFlowData.subarray(0, encryptedFlowData.length - TAG_LENGTH);
     const authTag = encryptedFlowData.subarray(encryptedFlowData.length - TAG_LENGTH);
 
-    // 3. Descifra con AES-128-GCM
-    // Usamos el IV tal como viene (16 bytes) para descifrar
+    // 3. Descifra con AES-128-GCM (usando IV de 16 bytes como viene)
     const decipher = crypto.createDecipheriv('aes-128-gcm', decryptedAesKey, initialVector);
     decipher.setAuthTag(authTag);
 
@@ -42,10 +41,13 @@ app.post('/decrypt', (req, res) => {
 
     const decryptedBody = JSON.parse(decryptedJSON);
 
+    // Truncar IV a 12 bytes para usar en la respuesta
+    const iv12 = initialVector.subarray(0, 12);
+
     res.json({
       ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
-      _iv: initialVector.toString('base64'), // Devolvemos el IV original de 16 bytes
+      _iv: iv12.toString('base64'), // Devolvemos IV de 12 bytes
     });
   } catch (error) {
     console.error('Decrypt error:', error);
@@ -59,14 +61,8 @@ app.post('/encrypt', (req, res) => {
     const body = req.body;
 
     const aesKey = Buffer.from(body.aesKey, 'base64');
-    let iv = Buffer.from(body.iv, 'base64');
+    const iv = Buffer.from(body.iv, 'base64');
     const responseData = body.data;
-
-    // Para cifrar, AES-GCM requiere IV de 12 bytes
-    // Si viene de 16 bytes, truncamos a 12
-    if (iv.length === 16) {
-      iv = iv.subarray(0, 12);
-    }
 
     // IV de respuesta: invertir último byte
     const responseIv = Buffer.from(iv);
