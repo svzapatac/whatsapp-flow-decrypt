@@ -7,6 +7,7 @@ app.use(express.json());
 // Lee la llave desde Base64
 const PRIVATE_KEY = Buffer.from(process.env.PRIVATE_KEY_B64, 'base64').toString('utf-8');
 
+// ========== ENDPOINT: DESCIFRAR (ya funciona) ==========
 app.post('/decrypt', (req, res) => {
   try {
     const body = req.body;
@@ -41,14 +42,51 @@ app.post('/decrypt', (req, res) => {
 
     const decryptedBody = JSON.parse(decryptedJSON);
 
-    // APLANA decryptedBody en la raíz del JSON con ...decryptedBody
     res.json({
       ...decryptedBody,
       _aesKey: decryptedAesKey.toString('base64'),
       _iv: initialVector.toString('base64'),
     });
   } catch (error) {
-    console.error('Full error:', error);
+    console.error('Decrypt error:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== ENDPOINT: CIFRAR RESPUESTA ==========
+app.post('/encrypt', (req, res) => {
+  try {
+    const body = req.body;
+
+    const aesKey = Buffer.from(body.aesKey, 'base64');
+    const iv = Buffer.from(body.iv, 'base64');
+    const responseData = body.data;
+
+    // IV de respuesta: invertir último byte
+    const responseIv = Buffer.from(iv);
+    responseIv[responseIv.length - 1] ^= 1;
+
+    // Preparar respuesta para el Flow
+    const responseObject = {
+      version: "3.0",
+      screen: responseData.screen || "DATOS",
+      data: responseData.data || {}
+    };
+
+    // Cifrar con AES-128-GCM
+    const cipher = crypto.createCipheriv('aes-128-gcm', aesKey, responseIv);
+    const encrypted = Buffer.concat([
+      cipher.update(JSON.stringify(responseObject), 'utf-8'),
+      cipher.final(),
+    ]);
+    const authTag = cipher.getAuthTag();
+
+    // Concatenar y convertir a base64
+    const finalResponse = Buffer.concat([encrypted, authTag]).toString('base64');
+
+    res.json({ response: finalResponse });
+  } catch (error) {
+    console.error('Encrypt error:', error);
     res.status(500).json({ error: error.message });
   }
 });
