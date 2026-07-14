@@ -59,12 +59,25 @@ app.post('/encrypt', (req, res) => {
     const body = req.body;
 
     const aesKey = Buffer.from(body.aesKey, 'base64');
-    const iv = Buffer.from(body.iv, 'base64');
+    let iv = Buffer.from(body.iv, 'base64');
     const responseData = body.data;
+
+    // Asegurar que el IV sea de 12 bytes (AES-GCM standard)
+    if (iv.length !== 12) {
+      // Si el IV es de 16 bytes, tomamos solo los primeros 12
+      // o si es más corto, lo ajustamos
+      console.log(`IV length: ${iv.length}, adjusting to 12 bytes`);
+      if (iv.length > 12) {
+        iv = iv.subarray(0, 12);
+      }
+    }
 
     // IV de respuesta: invertir último byte
     const responseIv = Buffer.from(iv);
     responseIv[responseIv.length - 1] ^= 1;
+
+    console.log('Original IV length:', iv.length);
+    console.log('Response IV length:', responseIv.length);
 
     // Preparar respuesta para el Flow
     const responseObject = {
@@ -87,9 +100,6 @@ app.post('/encrypt', (req, res) => {
     res.json({ response: finalResponse });
   } catch (error) {
     console.error('Encrypt error:', error);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message, stack: error.stack });
   }
 });
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
