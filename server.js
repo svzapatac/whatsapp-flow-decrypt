@@ -256,10 +256,9 @@ app.post('/flow', async (req, res) => {
     // 6. Encriptar respuesta
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
 
-    res.json({
-      encrypted_response: encryptedResponse,
-      aes_key_id: body.aes_key_id
-    });
+  res.json({
+  encrypted_response: encryptedResponse
+});
 
   } catch (error) {
     console.error('Error:', error);
