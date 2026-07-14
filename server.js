@@ -255,16 +255,17 @@ app.post('/flow', async (req, res) => {
 
     // 6. Encriptar respuesta
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
+    
+    console.log('=== RESPONSE DEBUG ===');
+    console.log('encryptedResponse:', encryptedResponse);
+    console.log('encryptedResponse length:', encryptedResponse.length);
+    console.log('encryptedResponse type:', typeof encryptedResponse);
+    console.log('Is empty:', !encryptedResponse);
+    console.log('First 50 chars:', encryptedResponse.substring(0, 50));
 
-  res.json({
-  encrypted_response: encryptedResponse
-});
-
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ error: error.message, stack: error.stack });
-  }
-});
+    res.json({
+      encrypted_response: encryptedResponse
+    });
 
 // ==================== HEALTH CHECK ====================
 app.get('/', (req, res) => {
