@@ -10,6 +10,7 @@ const PRIVATE_KEY = Buffer.from(process.env.PRIVATE_KEY_B64, 'base64').toString(
 const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 const CALENDAR_ID = process.env.CALENDAR_ID || 'potrillosterraza@gmail.com';
+const ZONA_HORARIA = 'America/Bogota';
 
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
@@ -45,12 +46,20 @@ function encryptAES(data, aesKey, iv) {
   return Buffer.concat([encrypted, authTag]).toString('base64');
 }
 
+// Devuelve la fecha/hora actual en la zona horaria del negocio (Bogotá, sin horario de verano)
+function ahoraEnBogota() {
+  const ahora = new Date();
+  return new Date(ahora.toLocaleString('en-US', { timeZone: ZONA_HORARIA }));
+}
+
+// Genera slots de horaInicio a horaFin, AMBOS extremos incluidos
+// (antes usaba "menor que" horaFin, lo que cortaba la última hora reservable)
 function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
   const slots = [];
   let [h, m] = horaInicio.split(':').map(Number);
   const [finH, finM] = horaFin.split(':').map(Number);
 
-  while (h < finH || (h === finH && m < finM)) {
+  while (h < finH || (h === finH && m <= finM)) {
     const horaStr = `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
     const ampm = h >= 12 ? 'PM' : 'AM';
     const h12 = h > 12 ? h - 12 : h === 0 ? 12 : h;
@@ -68,8 +77,34 @@ function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
   return slots;
 }
 
+function slotsDelDiaSegunDiaSemana(diaSemana) {
+  if (diaSemana === 0) {
+    // Domingo: 12:00-13:30 y 16:30-19:00
+    return [
+      ...generarSlots('12:00', '13:30'),
+      ...generarSlots('16:30', '19:00')
+    ];
+  }
+  // Lunes a Sábado: 12:00-21:00 (9:00 PM incluida)
+  return generarSlots('12:00', '21:00');
+}
+
+// Si dateStr es HOY, quita los horarios que ya pasaron
+function quitarHorasPasadasSiEsHoy(slots, dateStr) {
+  const ahora = ahoraEnBogota();
+  const hoyStr = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}`;
+
+  if (dateStr !== hoyStr) return slots;
+
+  const minutosAhora = ahora.getHours() * 60 + ahora.getMinutes();
+
+  return slots.filter(slot => {
+    const [h, m] = slot.id.split(':').map(Number);
+    return (h * 60 + m) > minutosAhora;
+  });
+}
+
 // Cuenta cuántos nombres de festejados escribió realmente la persona.
-// Soporta separadores: coma, " y ", " e ", "&" y saltos de línea.
 function contarNombres(nombres) {
   if (!nombres || typeof nombres !== 'string') return 0;
 
@@ -128,17 +163,10 @@ async function obtenerFechasDisponibles() {
     const dateStr = date.toISOString().split('T')[0];
     const diaSemana = date.getDay();
 
-    let slotsDelDia = [];
-    if (diaSemana === 0) {
-      // Domingo: 12:00-13:30 y 16:30-19:00
-      slotsDelDia = [
-        ...generarSlots('12:00', '13:30'),
-        ...generarSlots('16:30', '19:00')
-      ];
-    } else {
-      // Lunes a Sábado: 12:00-21:00
-      slotsDelDia = generarSlots('12:00', '21:00');
-    }
+    let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+
+    // Si el día es hoy, quitar las horas que ya pasaron ANTES de revisar disponibilidad
+    slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, dateStr);
 
     const slotsDisponibles = slotsDelDia.filter(slot => {
       const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
@@ -206,9 +234,9 @@ app.post('/flow', async (req, res) => {
           const tipoDecoracion = decryptedBody.data.tipo_decoracion || 'cumpleanos';
 
           // Nota: WhatsApp Flow no permite regresar a la misma pantalla (ni ciclos
-          // entre pantallas) desde data_exchange, así que no podemos bloquear el
-          // avance con un mensaje de "corrige esto" y quedarnos en el formulario.
-          // Solo usamos el número de festejados para decidir el siguiente paso.
+          // entre pantallas) desde data_exchange, así que no bloqueamos el avance
+          // con un mensaje de "corrige esto". Solo usamos el número de festejados
+          // para decidir el siguiente paso.
 
           // --- 0 o 1 festejado: no tiene sentido preguntar por combo adicional ---
           if (numeroFestejados <= 1) {
@@ -296,15 +324,10 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = [];
-          if (diaSemana === 0) {
-            slotsDelDia = [
-              ...generarSlots('12:00', '13:30'),
-              ...generarSlots('16:30', '19:00')
-            ];
-          } else {
-            slotsDelDia = generarSlots('12:00', '21:00');
-          }
+          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+
+          // Quitar horas ya pasadas si la fecha elegida es hoy
+          slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
           const horariosDisponibles = slotsDelDia.filter(slot => {
             const reservas = reservasPorHora[slot.id] || 0;
