@@ -68,6 +68,83 @@ function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
   return slots;
 }
 
+// Cuenta cuántos nombres de festejados escribió realmente la persona.
+// Soporta separadores: coma, " y ", " e ", "&" y saltos de línea.
+function contarNombres(nombres) {
+  if (!nombres || typeof nombres !== 'string') return 0;
+
+  const normalizado = nombres
+    .replace(/\s+y\s+/gi, ',')
+    .replace(/\s+e\s+/gi, ',')
+    .replace(/&/g, ',')
+    .replace(/\n/g, ',');
+
+  return normalizado
+    .split(',')
+    .map(n => n.trim())
+    .filter(n => n.length > 0)
+    .length;
+}
+
+// Consulta Google Calendar y arma las fechas disponibles (próximos 14 días)
+async function obtenerFechasDisponibles() {
+  const now = new Date();
+  const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+
+  const events = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    timeMin: now.toISOString(),
+    timeMax: twoWeeks.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+
+  const reservasPorFechaHora = {};
+  events.data.items?.forEach(event => {
+    const start = new Date(event.start.dateTime || event.start.date);
+    const fecha = start.toISOString().split('T')[0];
+    const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+
+    if (!reservasPorFechaHora[fecha]) reservasPorFechaHora[fecha] = {};
+    if (!reservasPorFechaHora[fecha][hora]) reservasPorFechaHora[fecha][hora] = 0;
+    reservasPorFechaHora[fecha][hora]++;
+  });
+
+  const fechasDisponibles = [];
+  for (let i = 0; i < 14; i++) {
+    const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
+    const dateStr = date.toISOString().split('T')[0];
+    const diaSemana = date.getDay();
+
+    let slotsDelDia = [];
+    if (diaSemana === 0) {
+      // Domingo: 12:00-13:30 y 16:30-19:00
+      slotsDelDia = [
+        ...generarSlots('12:00', '13:30'),
+        ...generarSlots('16:30', '19:00')
+      ];
+    } else {
+      // Lunes a Sábado: 12:00-21:00
+      slotsDelDia = generarSlots('12:00', '21:00');
+    }
+
+    const slotsDisponibles = slotsDelDia.filter(slot => {
+      const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
+      return reservas < 20;
+    });
+
+    if (slotsDisponibles.length > 0) {
+      const options = { weekday: 'long', day: 'numeric', month: 'long' };
+      fechasDisponibles.push({
+        id: dateStr,
+        title: date.toLocaleDateString('es-CO', options)
+      });
+    }
+  }
+
+  return fechasDisponibles;
+}
+
 // ==================== ENDPOINT PRINCIPAL ====================
 app.post('/flow', async (req, res) => {
   let decryptedAesKey, initialVector;
@@ -109,70 +186,71 @@ app.post('/flow', async (req, res) => {
       case 'data_exchange': {
         const trigger = decryptedBody.data?.trigger;
 
-        if (trigger === 'consultar_disponibilidad') {
-          // Consultar Google Calendar - próximos 14 días
-          const now = new Date();
-          const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+        if (trigger === 'validar_festejados') {
+          const nombreFestejado = decryptedBody.data.nombre_festejado || '';
+          const numeroFestejados = parseInt(decryptedBody.data.numero_festejados, 10) || 0;
+          const numeroPersonas = decryptedBody.data.numero_personas;
+          const decoracion = decryptedBody.data.decoracion || 'si';
+          const tipoDecoracion = decryptedBody.data.tipo_decoracion || 'cumpleanos';
 
-          const events = await calendar.events.list({
-            calendarId: CALENDAR_ID,
-            timeMin: now.toISOString(),
-            timeMax: twoWeeks.toISOString(),
-            singleEvents: true,
-            orderBy: 'startTime',
-          });
+          const nombresContados = contarNombres(nombreFestejado);
 
-          // Agrupar eventos por fecha y hora
-          const reservasPorFechaHora = {};
-          events.data.items?.forEach(event => {
-            const start = new Date(event.start.dateTime || event.start.date);
-            const fecha = start.toISOString().split('T')[0];
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
-
-            if (!reservasPorFechaHora[fecha]) reservasPorFechaHora[fecha] = {};
-            if (!reservasPorFechaHora[fecha][hora]) reservasPorFechaHora[fecha][hora] = 0;
-            reservasPorFechaHora[fecha][hora]++;
-          });
-
-          // Generar fechas disponibles
-          const fechasDisponibles = [];
-          for (let i = 0; i < 14; i++) {
-            const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
-            const dateStr = date.toISOString().split('T')[0];
-            const diaSemana = date.getDay();
-
-            let slotsDelDia = [];
-            if (diaSemana === 0) {
-              // Domingo: 12:00-13:30 y 16:30-19:00
-              slotsDelDia = [
-                ...generarSlots('12:00', '13:30'),
-                ...generarSlots('16:30', '19:00')
-              ];
-            } else {
-              // Lunes a Sábado: 12:00-21:00
-              slotsDelDia = generarSlots('12:00', '21:00');
-            }
-
-            // Filtrar slots con menos de 20 reservas
-            const slotsDisponibles = slotsDelDia.filter(slot => {
-              const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
-              return reservas < 20;
-            });
-
-            if (slotsDisponibles.length > 0) {
-              const options = { weekday: 'long', day: 'numeric', month: 'long' };
-              fechasDisponibles.push({
-                id: dateStr,
-                title: date.toLocaleDateString('es-CO', options)
-              });
-            }
+          // --- Anti-trolleo: los nombres escritos deben coincidir con el número de festejados ---
+          if (nombresContados !== numeroFestejados) {
+            responseData = {
+              screen: 'DATOS_RESERVA_CUMPLEANOS',
+              data: {},
+              error_message: `Escribiste que son ${numeroFestejados} festejado(s), pero ingresaste ${nombresContados} nombre(s). Por favor verifica los datos antes de continuar.`
+            };
           }
+          // --- 0 o 1 festejado: no tiene sentido preguntar por combo adicional ---
+          else if (numeroFestejados <= 1) {
+            const fechasDisponibles = await obtenerFechasDisponibles();
+            responseData = {
+              screen: 'SELECCION_HORARIO',
+              data: {
+                nombre_festejado: nombreFestejado,
+                numero_festejados: String(numeroFestejados || 1),
+                numero_personas: numeroPersonas,
+                decoracion,
+                tipo_decoracion: tipoDecoracion,
+                combo_adicional: 'no',
+                cantidad_combos: '0',
+                costo_combo: '0',
+                fechas_disponibles: fechasDisponibles,
+                horarios_disponibles: []
+              }
+            };
+          }
+          // --- 2 o más festejados: sí se pregunta por el combo adicional ---
+          else {
+            responseData = {
+              screen: 'COMBO_ADICIONAL',
+              data: {
+                nombre_festejado: nombreFestejado,
+                numero_festejados: String(numeroFestejados),
+                numero_personas: numeroPersonas,
+                decoracion,
+                tipo_decoracion: tipoDecoracion
+              }
+            };
+          }
+        }
+
+        else if (trigger === 'consultar_disponibilidad') {
+          const fechasDisponibles = await obtenerFechasDisponibles();
 
           responseData = {
             screen: 'SELECCION_HORARIO',
             data: {
               nombre_festejado: decryptedBody.data.nombre_festejado,
+              numero_festejados: decryptedBody.data.numero_festejados || '1',
               numero_personas: decryptedBody.data.numero_personas,
+              decoracion: decryptedBody.data.decoracion || 'si',
+              tipo_decoracion: decryptedBody.data.tipo_decoracion || 'cumpleanos',
+              combo_adicional: decryptedBody.data.combo_adicional || 'no',
+              cantidad_combos: decryptedBody.data.cantidad_combos || '0',
+              costo_combo: decryptedBody.data.costo_combo || '0',
               fechas_disponibles: fechasDisponibles,
               horarios_disponibles: []
             }
@@ -225,22 +303,15 @@ app.post('/flow', async (req, res) => {
             screen: 'SELECCION_HORARIO',
             data: {
               nombre_festejado: decryptedBody.data.nombre_festejado,
+              numero_festejados: decryptedBody.data.numero_festejados || '1',
               numero_personas: decryptedBody.data.numero_personas,
+              decoracion: decryptedBody.data.decoracion || 'si',
+              tipo_decoracion: decryptedBody.data.tipo_decoracion || 'cumpleanos',
+              combo_adicional: decryptedBody.data.combo_adicional || 'no',
+              cantidad_combos: decryptedBody.data.cantidad_combos || '0',
+              costo_combo: decryptedBody.data.costo_combo || '0',
               fechas_disponibles: decryptedBody.data.fechas_disponibles || [],
               horarios_disponibles: horariosDisponibles
-            }
-          };
-        }
-
-        else if (trigger === 'validar_festejados') {
-          responseData = {
-            screen: 'COMBO_ADICIONAL',
-            data: {
-              nombre_festejado: decryptedBody.data.nombre_festejado,
-              numero_festejados: decryptedBody.data.numero_festejados,
-              numero_personas: decryptedBody.data.numero_personas,
-              decoracion: decryptedBody.data.decoracion,
-              tipo_decoracion: decryptedBody.data.tipo_decoracion
             }
           };
         }
