@@ -86,6 +86,19 @@ function contarNombres(nombres) {
     .length;
 }
 
+// Arma el texto final del resumen de precio ya formateado (para evitar
+// expresiones con operadores dentro del JSON del Flow, que no se evalúan).
+function construirResumenPrecio(comboAdicional, cantidadCombos, costoCombo) {
+  let resumen = 'Pack de cumpleaños: $50.000';
+  const cantidad = parseInt(cantidadCombos, 10) || 0;
+
+  if (comboAdicional === 'si' && cantidad > 0) {
+    resumen += ` + ${cantidad} combo(s) adicional(es): $${Number(costoCombo).toLocaleString('es-CO')}`;
+  }
+
+  return resumen;
+}
+
 // Consulta Google Calendar y arma las fechas disponibles (próximos 14 días)
 async function obtenerFechasDisponibles() {
   const now = new Date();
@@ -198,9 +211,10 @@ app.post('/flow', async (req, res) => {
           // --- Anti-trolleo: los nombres escritos deben coincidir con el número de festejados ---
           if (nombresContados !== numeroFestejados) {
             responseData = {
-              screen: 'DATOS_RESERVA_CUMPLEANOS',
-              data: {},
-              error_message: `Escribiste que son ${numeroFestejados} festejado(s), pero ingresaste ${nombresContados} nombre(s). Por favor verifica los datos antes de continuar.`
+              screen: 'ERROR_FESTEJADOS',
+              data: {
+                mensaje_error: `Dijiste que son ${numeroFestejados} festejado(s), pero escribiste ${nombresContados} nombre(s): "${nombreFestejado}". Corrige el número de festejados o los nombres para que coincidan e inténtalo de nuevo.`
+              }
             };
           }
           // --- 0 o 1 festejado: no tiene sentido preguntar por combo adicional ---
@@ -217,6 +231,7 @@ app.post('/flow', async (req, res) => {
                 combo_adicional: 'no',
                 cantidad_combos: '0',
                 costo_combo: '0',
+                resumen_precio: construirResumenPrecio('no', '0', '0'),
                 fechas_disponibles: fechasDisponibles,
                 horarios_disponibles: []
               }
@@ -239,6 +254,9 @@ app.post('/flow', async (req, res) => {
 
         else if (trigger === 'consultar_disponibilidad') {
           const fechasDisponibles = await obtenerFechasDisponibles();
+          const comboAdicional = decryptedBody.data.combo_adicional || 'no';
+          const cantidadCombos = decryptedBody.data.cantidad_combos || '0';
+          const costoCombo = decryptedBody.data.costo_combo || '0';
 
           responseData = {
             screen: 'SELECCION_HORARIO',
@@ -248,9 +266,10 @@ app.post('/flow', async (req, res) => {
               numero_personas: decryptedBody.data.numero_personas,
               decoracion: decryptedBody.data.decoracion || 'si',
               tipo_decoracion: decryptedBody.data.tipo_decoracion || 'cumpleanos',
-              combo_adicional: decryptedBody.data.combo_adicional || 'no',
-              cantidad_combos: decryptedBody.data.cantidad_combos || '0',
-              costo_combo: decryptedBody.data.costo_combo || '0',
+              combo_adicional: comboAdicional,
+              cantidad_combos: cantidadCombos,
+              costo_combo: costoCombo,
+              resumen_precio: construirResumenPrecio(comboAdicional, cantidadCombos, costoCombo),
               fechas_disponibles: fechasDisponibles,
               horarios_disponibles: []
             }
@@ -299,6 +318,10 @@ app.post('/flow', async (req, res) => {
             return reservas < 20;
           });
 
+          const comboAdicional = decryptedBody.data.combo_adicional || 'no';
+          const cantidadCombos = decryptedBody.data.cantidad_combos || '0';
+          const costoCombo = decryptedBody.data.costo_combo || '0';
+
           responseData = {
             screen: 'SELECCION_HORARIO',
             data: {
@@ -307,9 +330,10 @@ app.post('/flow', async (req, res) => {
               numero_personas: decryptedBody.data.numero_personas,
               decoracion: decryptedBody.data.decoracion || 'si',
               tipo_decoracion: decryptedBody.data.tipo_decoracion || 'cumpleanos',
-              combo_adicional: decryptedBody.data.combo_adicional || 'no',
-              cantidad_combos: decryptedBody.data.cantidad_combos || '0',
-              costo_combo: decryptedBody.data.costo_combo || '0',
+              combo_adicional: comboAdicional,
+              cantidad_combos: cantidadCombos,
+              costo_combo: costoCombo,
+              resumen_precio: construirResumenPrecio(comboAdicional, cantidadCombos, costoCombo),
               fechas_disponibles: decryptedBody.data.fechas_disponibles || [],
               horarios_disponibles: horariosDisponibles
             }
