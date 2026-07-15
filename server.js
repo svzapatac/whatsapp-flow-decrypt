@@ -86,8 +86,7 @@ function contarNombres(nombres) {
     .length;
 }
 
-// Arma el texto final del resumen de precio ya formateado (para evitar
-// expresiones con operadores dentro del JSON del Flow, que no se evalúan).
+// Arma el texto final del resumen de precio ya formateado.
 function construirResumenPrecio(comboAdicional, cantidadCombos, costoCombo) {
   let resumen = 'Pack de cumpleaños: $50.000';
   const cantidad = parseInt(cantidadCombos, 10) || 0;
@@ -206,19 +205,13 @@ app.post('/flow', async (req, res) => {
           const decoracion = decryptedBody.data.decoracion || 'si';
           const tipoDecoracion = decryptedBody.data.tipo_decoracion || 'cumpleanos';
 
-          const nombresContados = contarNombres(nombreFestejado);
+          // Nota: WhatsApp Flow no permite regresar a la misma pantalla (ni ciclos
+          // entre pantallas) desde data_exchange, así que no podemos bloquear el
+          // avance con un mensaje de "corrige esto" y quedarnos en el formulario.
+          // Solo usamos el número de festejados para decidir el siguiente paso.
 
-          // --- Anti-trolleo: los nombres escritos deben coincidir con el número de festejados ---
-          if (nombresContados !== numeroFestejados) {
-            responseData = {
-              screen: 'ERROR_FESTEJADOS',
-              data: {
-                mensaje_error: `Dijiste que son ${numeroFestejados} festejado(s), pero escribiste ${nombresContados} nombre(s): "${nombreFestejado}". Corrige el número de festejados o los nombres para que coincidan e inténtalo de nuevo.`
-              }
-            };
-          }
           // --- 0 o 1 festejado: no tiene sentido preguntar por combo adicional ---
-          else if (numeroFestejados <= 1) {
+          if (numeroFestejados <= 1) {
             const fechasDisponibles = await obtenerFechasDisponibles();
             responseData = {
               screen: 'SELECCION_HORARIO',
@@ -361,7 +354,6 @@ app.post('/flow', async (req, res) => {
     }
 
     // 5. Preparar IV de respuesta: invertir TODOS los bits del IV original
-    // (spec de Meta: "flip all bits of the IV used to decrypt the request")
     const responseIv = Buffer.from(initialVector.map(byte => ~byte & 0xFF));
 
     // 6. Encriptar respuesta
@@ -371,8 +363,6 @@ app.post('/flow', async (req, res) => {
     console.log('encryptedResponse length:', encryptedResponse.length);
     console.log('First 50 chars:', encryptedResponse.substring(0, 50));
 
-    // IMPORTANTE: Meta espera el string Base64 "pelado" como body,
-    // NO envuelto en JSON. Por eso usamos text/plain + res.send().
     res.set('Content-Type', 'text/plain');
     res.send(encryptedResponse);
 
