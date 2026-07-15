@@ -276,8 +276,10 @@ app.post('/flow', async (req, res) => {
         else if (trigger === 'consultar_disponibilidad') {
           const fechasDisponibles = await obtenerFechasDisponibles();
           const comboAdicional = decryptedBody.data.combo_adicional || 'no';
-          const cantidadCombos = decryptedBody.data.cantidad_combos || '0';
-          const costoCombo = decryptedBody.data.costo_combo || '0';
+          // El Flow no puede multiplicar (${form.x * 19000} no se evalúa), así que
+          // el costo del combo se calcula aquí, con el número de combos ya limpio.
+          const cantidadCombos = String(parseInt(decryptedBody.data.cantidad_combos, 10) || 0);
+          const costoCombo = String((parseInt(cantidadCombos, 10) || 0) * 19000);
 
           responseData = {
             screen: 'SELECCION_HORARIO',
