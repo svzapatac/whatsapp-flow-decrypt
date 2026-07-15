@@ -232,6 +232,19 @@ app.post('/flow', async (req, res) => {
           };
         }
 
+        else if (trigger === 'validar_festejados') {
+          responseData = {
+            screen: 'COMBO_ADICIONAL',
+            data: {
+              nombre_festejado: decryptedBody.data.nombre_festejado,
+              numero_festejados: decryptedBody.data.numero_festejados,
+              numero_personas: decryptedBody.data.numero_personas,
+              decoracion: decryptedBody.data.decoracion,
+              tipo_decoracion: decryptedBody.data.tipo_decoracion
+            }
+          };
+        }
+
         else {
           responseData = { error: 'Trigger desconocido: ' + trigger };
         }
