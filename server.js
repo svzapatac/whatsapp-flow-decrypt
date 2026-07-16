@@ -16,7 +16,7 @@ const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
   null,
   GOOGLE_PRIVATE_KEY,
-  ['https://www.googleapis.com/auth/calendar.readonly']
+  ['https://www.googleapis.com/auth/calendar']
 );
 const calendar = google.calendar({ version: 'v3', auth });
 
@@ -134,6 +134,52 @@ function construirResumenPrecio(comboAdicional, cantidadCombos, costoCombo) {
 }
 
 // Consulta Google Calendar y arma las fechas disponibles (próximos 14 días)
+// Saca las últimas 4 cifras de un número de teléfono/user_id, que es el
+// código con el que se etiquetan los eventos en Google Calendar
+// (ej. "Cumpleaños-Sofia Codigo:1965").
+function obtenerUltimos4Digitos(valor) {
+  const soloDigitos = String(valor || '').replace(/\D/g, '');
+  return soloDigitos.slice(-4);
+}
+
+// Busca en Google Calendar el próximo evento (dentro de los próximos 90 días)
+// cuyo título termine en "Codigo:XXXX" con el código dado.
+async function buscarReservaPorCodigo(codigo) {
+  if (!codigo || codigo.length < 4) return null;
+
+  const ahora = new Date();
+  const limite = new Date(ahora.getTime() + 90 * 24 * 60 * 60 * 1000);
+
+  const events = await calendar.events.list({
+    calendarId: CALENDAR_ID,
+    timeMin: ahora.toISOString(),
+    timeMax: limite.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+    q: codigo,
+  });
+
+  // El parámetro "q" de Google es una búsqueda de texto amplia; validamos
+  // con una expresión exacta para no traer falsos positivos.
+  const regexCodigo = new RegExp(`Codigo:${codigo}$`);
+  const encontrado = (events.data.items || []).find(ev => regexCodigo.test(ev.summary || ''));
+
+  if (!encontrado) return null;
+
+  const inicio = new Date(encontrado.start.dateTime || encontrado.start.date);
+  const fin = new Date(encontrado.end.dateTime || encontrado.end.date);
+
+  return {
+    event_id: encontrado.id,
+    titulo: encontrado.summary,
+    fecha: inicio.toISOString().split('T')[0],
+    fecha_legible: inicio.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }),
+    hora: `${inicio.getHours().toString().padStart(2, '0')}:${inicio.getMinutes().toString().padStart(2, '0')}`,
+    hora_legible: inicio.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true }),
+    duracion_ms: fin - inicio,
+  };
+}
+
 async function obtenerFechasDisponibles() {
   const now = new Date();
   const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
@@ -611,6 +657,174 @@ app.post('/flow', async (req, res) => {
               horarios_disponibles: horariosDisponibles
             }
           };
+        }
+
+        // ==================== GESTIONAR RESERVA (cambiar hora / cancelar) ====================
+
+        else if (trigger === 'procesar_opcion_menu') {
+          const opcionMenu = decryptedBody.data.opcion_menu;
+          const userId = decryptedBody.data.user_id;
+
+          if (opcionMenu === 'hablar_asesor') {
+            responseData = { screen: 'CONTACTO_ASESOR', data: {} };
+          }
+
+          else if (opcionMenu === 'preguntas_generales') {
+            responseData = { screen: 'REDIRIGIR_PREGUNTAS', data: {} };
+          }
+
+          else if (opcionMenu === 'cambiar_hora' || opcionMenu === 'cancelar_reserva') {
+            const codigo = obtenerUltimos4Digitos(userId);
+            const reserva = await buscarReservaPorCodigo(codigo);
+
+            if (!reserva) {
+              responseData = {
+                screen: 'NO_SE_ENCONTRO_RESERVA',
+                data: { opcion_menu: opcionMenu }
+              };
+            } else {
+              const screenDestino = opcionMenu === 'cancelar_reserva' ? 'CONFIRMAR_CANCELACION' : 'CONFIRMAR_REUBICACION';
+              const resumenReserva = `Encontramos tu reserva: ${reserva.titulo.replace(/Codigo:\d+$/, '').trim()}, para el ${reserva.fecha_legible} a las ${reserva.hora_legible}.`;
+
+              responseData = {
+                screen: screenDestino,
+                data: {
+                  event_id: reserva.event_id,
+                  resumen_reserva: resumenReserva
+                }
+              };
+            }
+          }
+
+          else {
+            responseData = { error: 'Opción de menú desconocida' };
+          }
+        }
+
+        else if (trigger === 'buscar_por_numero_manual') {
+          const telefono = decryptedBody.data.telefono;
+          const opcionMenu = decryptedBody.data.opcion_menu;
+          const codigo = obtenerUltimos4Digitos(telefono);
+          const reserva = await buscarReservaPorCodigo(codigo);
+
+          if (!reserva) {
+            responseData = {
+              screen: 'NO_SE_ENCONTRO_RESERVA',
+              data: { opcion_menu: opcionMenu }
+            };
+          } else {
+            const screenDestino = opcionMenu === 'cancelar_reserva' ? 'CONFIRMAR_CANCELACION' : 'CONFIRMAR_REUBICACION';
+            const resumenReserva = `Encontramos tu reserva: ${reserva.titulo.replace(/Codigo:\d+$/, '').trim()}, para el ${reserva.fecha_legible} a las ${reserva.hora_legible}.`;
+
+            responseData = {
+              screen: screenDestino,
+              data: {
+                event_id: reserva.event_id,
+                resumen_reserva: resumenReserva
+              }
+            };
+          }
+        }
+
+        else if (trigger === 'confirmar_cancelacion') {
+          const eventId = decryptedBody.data.event_id;
+          try {
+            await calendar.events.delete({ calendarId: CALENDAR_ID, eventId });
+          } catch (err) {
+            console.error('Error cancelando evento:', err.message);
+          }
+          responseData = { screen: 'RESERVA_CANCELADA', data: {} };
+        }
+
+        else if (trigger === 'consultar_fechas_reubicar') {
+          const fechasDisponibles = await obtenerFechasDisponibles();
+          responseData = {
+            screen: 'SELECCION_NUEVA_HORA',
+            data: {
+              event_id: decryptedBody.data.event_id,
+              resumen_reserva: decryptedBody.data.resumen_reserva,
+              fechas_disponibles: fechasDisponibles,
+              horarios_disponibles: []
+            }
+          };
+        }
+
+        else if (trigger === 'consultar_horas_reubicar') {
+          const fechaSeleccionada = decryptedBody.data.fecha_seleccionada;
+          const date = new Date(fechaSeleccionada + 'T00:00:00');
+          const diaSemana = date.getDay();
+
+          const inicioDia = new Date(date);
+          inicioDia.setHours(0, 0, 0, 0);
+          const finDia = new Date(date);
+          finDia.setHours(23, 59, 59, 999);
+
+          const events = await calendar.events.list({
+            calendarId: CALENDAR_ID,
+            timeMin: inicioDia.toISOString(),
+            timeMax: finDia.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+          });
+
+          const reservasPorHora = {};
+          events.data.items?.forEach(event => {
+            // No contar el propio evento que se está moviendo
+            if (event.id === decryptedBody.data.event_id) return;
+            const start = new Date(event.start.dateTime || event.start.date);
+            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
+            reservasPorHora[hora]++;
+          });
+
+          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
+
+          const horariosDisponibles = slotsDelDia.filter(slot => {
+            const reservas = reservasPorHora[slot.id] || 0;
+            return reservas < 20;
+          });
+
+          responseData = {
+            screen: 'SELECCION_NUEVA_HORA',
+            data: {
+              event_id: decryptedBody.data.event_id,
+              resumen_reserva: decryptedBody.data.resumen_reserva,
+              fechas_disponibles: decryptedBody.data.fechas_disponibles || [],
+              horarios_disponibles: horariosDisponibles
+            }
+          };
+        }
+
+        else if (trigger === 'confirmar_reubicacion') {
+          const eventId = decryptedBody.data.event_id;
+          const fechaSeleccionada = decryptedBody.data.fecha_seleccionada;
+          const horaSeleccionada = decryptedBody.data.hora_seleccionada;
+
+          try {
+            const existente = await calendar.events.get({ calendarId: CALENDAR_ID, eventId });
+            const inicioViejo = new Date(existente.data.start.dateTime || existente.data.start.date);
+            const finViejo = new Date(existente.data.end.dateTime || existente.data.end.date);
+            const duracionMs = finViejo - inicioViejo;
+
+            const [h, m] = horaSeleccionada.split(':').map(Number);
+            const nuevoInicio = new Date(fechaSeleccionada + 'T00:00:00');
+            nuevoInicio.setHours(h, m, 0, 0);
+            const nuevoFin = new Date(nuevoInicio.getTime() + duracionMs);
+
+            await calendar.events.patch({
+              calendarId: CALENDAR_ID,
+              eventId,
+              requestBody: {
+                start: { dateTime: nuevoInicio.toISOString() },
+                end: { dateTime: nuevoFin.toISOString() },
+              },
+            });
+          } catch (err) {
+            console.error('Error reubicando evento:', err.message);
+          }
+
+          responseData = { screen: 'RESERVA_REUBICADA', data: {} };
         }
 
         else {
