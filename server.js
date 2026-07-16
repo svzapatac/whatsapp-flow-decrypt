@@ -871,7 +871,13 @@ app.post('/flow', async (req, res) => {
             console.error('Error reubicando evento:', err.message);
           }
 
-          responseData = { screen: 'RESERVA_REUBICADA', data: {} };
+          responseData = {
+            screen: 'RESERVA_REUBICADA',
+            data: {
+              fecha_seleccionada: fechaSeleccionada,
+              hora_seleccionada: horaSeleccionada,
+            }
+          };
         }
 
         else {
