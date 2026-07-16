@@ -46,6 +46,29 @@ function encryptAES(data, aesKey, iv) {
   return Buffer.concat([encrypted, authTag]).toString('base64');
 }
 
+// Convierte un objeto Date (que JS siempre maneja internamente en UTC) a sus
+// componentes de fecha y hora tal como se ven en Bogotá. Esto es OBLIGATORIO
+// para leer horas de eventos de Google Calendar: usar .getHours() directo
+// da la hora en la zona horaria del SERVIDOR (que en Render suele ser UTC),
+// no la de Bogotá, y eso desfasa todo por 5 horas.
+function obtenerFechaHoraBogota(fechaJS) {
+  const formateador = new Intl.DateTimeFormat('en-CA', {
+    timeZone: ZONA_HORARIA,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  });
+  const partes = formateador.formatToParts(fechaJS);
+  const obtener = (tipo) => partes.find(p => p.type === tipo).value;
+  return {
+    fecha: `${obtener('year')}-${obtener('month')}-${obtener('day')}`,
+    hora: `${obtener('hour')}:${obtener('minute')}`,
+  };
+}
+
 // Devuelve la fecha/hora actual en la zona horaria del negocio (Bogotá, sin horario de verano)
 function ahoraEnBogota() {
   const ahora = new Date();
@@ -168,26 +191,28 @@ async function buscarReservaPorCodigo(codigo) {
 
   const inicio = new Date(encontrado.start.dateTime || encontrado.start.date);
   const fin = new Date(encontrado.end.dateTime || encontrado.end.date);
+  const { fecha, hora } = obtenerFechaHoraBogota(inicio);
 
   return {
     event_id: encontrado.id,
     titulo: encontrado.summary,
-    fecha: inicio.toISOString().split('T')[0],
-    fecha_legible: inicio.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long' }),
-    hora: `${inicio.getHours().toString().padStart(2, '0')}:${inicio.getMinutes().toString().padStart(2, '0')}`,
-    hora_legible: inicio.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit', hour12: true }),
+    fecha,
+    fecha_legible: inicio.toLocaleDateString('es-CO', { timeZone: ZONA_HORARIA, weekday: 'long', day: 'numeric', month: 'long' }),
+    hora,
+    hora_legible: inicio.toLocaleTimeString('es-CO', { timeZone: ZONA_HORARIA, hour: 'numeric', minute: '2-digit', hour12: true }),
     duracion_ms: fin - inicio,
   };
 }
 
 async function obtenerFechasDisponibles() {
-  const now = new Date();
-  const twoWeeks = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+  const ahoraReal = new Date();
+  const ahoraBogota = ahoraEnBogota();
+  const limiteReal = new Date(ahoraReal.getTime() + 14 * 24 * 60 * 60 * 1000);
 
   const events = await calendar.events.list({
     calendarId: CALENDAR_ID,
-    timeMin: now.toISOString(),
-    timeMax: twoWeeks.toISOString(),
+    timeMin: ahoraReal.toISOString(),
+    timeMax: limiteReal.toISOString(),
     singleEvents: true,
     orderBy: 'startTime',
   });
@@ -195,8 +220,7 @@ async function obtenerFechasDisponibles() {
   const reservasPorFechaHora = {};
   events.data.items?.forEach(event => {
     const start = new Date(event.start.dateTime || event.start.date);
-    const fecha = start.toISOString().split('T')[0];
-    const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+    const { fecha, hora } = obtenerFechaHoraBogota(start);
 
     if (!reservasPorFechaHora[fecha]) reservasPorFechaHora[fecha] = {};
     if (!reservasPorFechaHora[fecha][hora]) reservasPorFechaHora[fecha][hora] = 0;
@@ -205,9 +229,12 @@ async function obtenerFechasDisponibles() {
 
   const fechasDisponibles = [];
   for (let i = 0; i < 14; i++) {
-    const date = new Date(now.getTime() + i * 24 * 60 * 60 * 1000);
-    const dateStr = date.toISOString().split('T')[0];
-    const diaSemana = date.getDay();
+    // Sumamos días sobre la fecha "de Bogotá" (no la del servidor), para que
+    // "hoy" siempre sea el día real en Bogotá sin importar en qué zona
+    // horaria esté corriendo el servidor.
+    const diaBogota = new Date(ahoraBogota.getTime() + i * 24 * 60 * 60 * 1000);
+    const dateStr = `${diaBogota.getFullYear()}-${String(diaBogota.getMonth() + 1).padStart(2, '0')}-${String(diaBogota.getDate()).padStart(2, '0')}`;
+    const diaSemana = diaBogota.getDay();
 
     let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
 
@@ -223,7 +250,7 @@ async function obtenerFechasDisponibles() {
       const options = { weekday: 'long', day: 'numeric', month: 'long' };
       fechasDisponibles.push({
         id: dateStr,
-        title: date.toLocaleDateString('es-CO', options)
+        title: diaBogota.toLocaleDateString('es-CO', options)
       });
     }
   }
@@ -367,7 +394,7 @@ app.post('/flow', async (req, res) => {
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
@@ -442,7 +469,7 @@ app.post('/flow', async (req, res) => {
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
@@ -503,7 +530,7 @@ app.post('/flow', async (req, res) => {
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
@@ -567,7 +594,7 @@ app.post('/flow', async (req, res) => {
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
@@ -632,7 +659,7 @@ app.post('/flow', async (req, res) => {
           const reservasPorHora = {};
           events.data.items?.forEach(event => {
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
@@ -772,7 +799,7 @@ app.post('/flow', async (req, res) => {
             // No contar el propio evento que se está moviendo
             if (event.id === decryptedBody.data.event_id) return;
             const start = new Date(event.start.dateTime || event.start.date);
-            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            const hora = obtenerFechaHoraBogota(start).hora;
             if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
             reservasPorHora[hora]++;
           });
