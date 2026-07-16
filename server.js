@@ -699,6 +699,20 @@ app.post('/flow', async (req, res) => {
 
         // ==================== GESTIONAR RESERVA (cambiar hora / cancelar) ====================
 
+        else if (trigger === 'procesar_opcion_otros') {
+          const opcionMenu = decryptedBody.data.opcion_menu;
+
+          if (opcionMenu === 'pqrs') {
+            responseData = { screen: 'SELECCION_TIPO_PQRS', data: {} };
+          } else if (opcionMenu === 'preguntas_frecuentes') {
+            responseData = { screen: 'FORM_PREGUNTA', data: {} };
+          } else if (opcionMenu === 'hablar_asesor') {
+            responseData = { screen: 'FORM_ASESOR', data: {} };
+          } else {
+            responseData = { error: 'Opción de menú desconocida' };
+          }
+        }
+
         else if (trigger === 'procesar_opcion_menu') {
           const opcionMenu = decryptedBody.data.opcion_menu;
           // Preferimos el user_id que venga en "data", pero si llega vacío
