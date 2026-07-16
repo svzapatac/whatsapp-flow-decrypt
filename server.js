@@ -165,6 +165,17 @@ function obtenerUltimos4Digitos(valor) {
   return soloDigitos.slice(-4);
 }
 
+// El flow_token del Flow "Gestionar reserva" se arma como
+// "gestionar-reserva-<user_id>-<timestamp>" (ver instrucciones del HTTP que
+// envía el Flow). Esto nos da una forma de recuperar el número del cliente
+// que NO depende de que "data.user_id" se haya propagado bien entre
+// pantallas de n8n — el flow_token siempre llega intacto en cada petición,
+// directo del protocolo de WhatsApp, sin pasar por nuestra propia lógica.
+function extraerUserIdDeFlowToken(flowToken) {
+  const match = String(flowToken || '').match(/^gestionar-reserva-(\d+)-/);
+  return match ? match[1] : null;
+}
+
 // Busca en Google Calendar el próximo evento (dentro de los próximos 90 días)
 // cuyo título termine en "Codigo:XXXX" con el código dado.
 async function buscarReservaPorCodigo(codigo) {
@@ -690,7 +701,14 @@ app.post('/flow', async (req, res) => {
 
         else if (trigger === 'procesar_opcion_menu') {
           const opcionMenu = decryptedBody.data.opcion_menu;
-          const userId = decryptedBody.data.user_id;
+          // Preferimos el user_id que venga en "data", pero si llega vacío
+          // (por cualquier problema de propagación en n8n), lo recuperamos
+          // directo del flow_token, que siempre llega intacto.
+          const userIdDeData = decryptedBody.data.user_id;
+          const userIdDeToken = extraerUserIdDeFlowToken(decryptedBody.flow_token);
+          const userId = userIdDeData || userIdDeToken;
+
+          console.log('[gestionar_reserva] user_id de data:', userIdDeData, '| de flow_token:', userIdDeToken, '| usado:', userId);
 
           if (opcionMenu === 'hablar_asesor') {
             responseData = { screen: 'CONTACTO_ASESOR', data: {} };
