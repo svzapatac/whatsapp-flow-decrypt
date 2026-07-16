@@ -179,11 +179,11 @@ async function buscarReservaPorCodigo(codigo) {
     timeMax: limite.toISOString(),
     singleEvents: true,
     orderBy: 'startTime',
-    q: codigo,
+    // No usamos "q" (búsqueda de texto de Google): no es confiable para
+    // encontrar "1965" dentro de "Codigo:1965" pegado sin espacio. Traemos
+    // todos los eventos del rango y filtramos nosotros mismos abajo.
   });
 
-  // El parámetro "q" de Google es una búsqueda de texto amplia; validamos
-  // con una expresión exacta para no traer falsos positivos.
   const regexCodigo = new RegExp(`Codigo:${codigo}$`);
   const encontrado = (events.data.items || []).find(ev => regexCodigo.test(ev.summary || ''));
 
@@ -834,9 +834,11 @@ app.post('/flow', async (req, res) => {
             const finViejo = new Date(existente.data.end.dateTime || existente.data.end.date);
             const duracionMs = finViejo - inicioViejo;
 
-            const [h, m] = horaSeleccionada.split(':').map(Number);
-            const nuevoInicio = new Date(fechaSeleccionada + 'T00:00:00');
-            nuevoInicio.setHours(h, m, 0, 0);
+            // OJO: construimos el ISO string con el offset -05:00 explícito
+            // (Bogotá no tiene horario de verano). Si dejamos que JS
+            // interprete "fechaT hora:00" sin offset, lo toma como hora
+            // LOCAL DEL SERVIDOR (UTC en Render), desfasando todo por 5h.
+            const nuevoInicio = new Date(`${fechaSeleccionada}T${horaSeleccionada}:00-05:00`);
             const nuevoFin = new Date(nuevoInicio.getTime() + duracionMs);
 
             await calendar.events.patch({
