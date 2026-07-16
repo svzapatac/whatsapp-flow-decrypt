@@ -420,6 +420,69 @@ app.post('/flow', async (req, res) => {
           };
         }
 
+        else if (trigger === 'consultar_disponibilidad_bautizo') {
+          const fechasDisponibles = await obtenerFechasDisponibles();
+
+          responseData = {
+            screen: 'SELECCION_HORARIO_BAUTIZO',
+            data: {
+              nombre_festejado: decryptedBody.data.nombre_festejado,
+              numero_personas: decryptedBody.data.numero_personas,
+              decoracion: decryptedBody.data.decoracion || 'si',
+              tipo_decoracion: decryptedBody.data.tipo_decoracion || 'bautizo',
+              fechas_disponibles: fechasDisponibles,
+              horarios_disponibles: []
+            }
+          };
+        }
+
+        else if (trigger === 'consultar_horarios_bautizo') {
+          const fechaSeleccionada = decryptedBody.data.fecha_seleccionada;
+          const date = new Date(fechaSeleccionada + 'T00:00:00');
+          const diaSemana = date.getDay();
+
+          const inicioDia = new Date(date);
+          inicioDia.setHours(0, 0, 0, 0);
+          const finDia = new Date(date);
+          finDia.setHours(23, 59, 59, 999);
+
+          const events = await calendar.events.list({
+            calendarId: CALENDAR_ID,
+            timeMin: inicioDia.toISOString(),
+            timeMax: finDia.toISOString(),
+            singleEvents: true,
+            orderBy: 'startTime',
+          });
+
+          const reservasPorHora = {};
+          events.data.items?.forEach(event => {
+            const start = new Date(event.start.dateTime || event.start.date);
+            const hora = `${start.getHours().toString().padStart(2, '0')}:${start.getMinutes().toString().padStart(2, '0')}`;
+            if (!reservasPorHora[hora]) reservasPorHora[hora] = 0;
+            reservasPorHora[hora]++;
+          });
+
+          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
+
+          const horariosDisponibles = slotsDelDia.filter(slot => {
+            const reservas = reservasPorHora[slot.id] || 0;
+            return reservas < 20;
+          });
+
+          responseData = {
+            screen: 'SELECCION_HORARIO_BAUTIZO',
+            data: {
+              nombre_festejado: decryptedBody.data.nombre_festejado,
+              numero_personas: decryptedBody.data.numero_personas,
+              decoracion: decryptedBody.data.decoracion || 'si',
+              tipo_decoracion: decryptedBody.data.tipo_decoracion || 'bautizo',
+              fechas_disponibles: decryptedBody.data.fechas_disponibles || [],
+              horarios_disponibles: horariosDisponibles
+            }
+          };
+        }
+
         else {
           responseData = { error: 'Trigger desconocido: ' + trigger };
         }
