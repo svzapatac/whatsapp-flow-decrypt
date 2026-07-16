@@ -556,6 +556,7 @@ app.post('/flow', async (req, res) => {
               numero_personas: decryptedBody.data.numero_personas,
               decoracion: decryptedBody.data.decoracion || 'si',
               tipo_decoracion: decryptedBody.data.tipo_decoracion || 'grado',
+              tipo_pack: decryptedBody.data.tipo_pack || '',
               fechas_disponibles: fechasDisponibles,
               horarios_disponibles: []
             }
@@ -603,6 +604,7 @@ app.post('/flow', async (req, res) => {
               numero_personas: decryptedBody.data.numero_personas,
               decoracion: decryptedBody.data.decoracion || 'si',
               tipo_decoracion: decryptedBody.data.tipo_decoracion || 'grado',
+              tipo_pack: decryptedBody.data.tipo_pack || '',
               fechas_disponibles: decryptedBody.data.fechas_disponibles || [],
               horarios_disponibles: horariosDisponibles
             }
