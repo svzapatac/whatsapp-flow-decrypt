@@ -1226,8 +1226,8 @@ app.post('/flow', async (req, res) => {
           function labelEntrada(nombreFijo, valorMenu, emojiDisponible) {
             const vacio = valorMenu === null || valorMenu === undefined || String(valorMenu).trim() === '';
             return vacio
-              ? `❌ ${nombreFijo} ya no está disponible`
-              : `${emojiDisponible} ${nombreFijo}`;
+              ? `${nombreFijo} ya no está disponible ❌`
+              : `${nombreFijo} ${emojiDisponible}`;
           }
 
           const labelSopa = labelEntrada('Sopa del día', menu?.entrada1, '🥣');
