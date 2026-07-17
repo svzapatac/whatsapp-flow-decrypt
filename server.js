@@ -441,6 +441,8 @@ app.post('/flow', async (req, res) => {
 
     console.log('=== REQUEST ===');
     console.log('Action:', decryptedBody.action);
+    console.log('flow_token recibido:', decryptedBody.flow_token);
+    console.log('user_id extraído (cancelar-pedido):', extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token));
     console.log('Data:', JSON.stringify(decryptedBody.data, null, 2));
 
     let responseData = {};
@@ -1070,26 +1072,17 @@ app.post('/flow', async (req, res) => {
               if (!pedido) {
                 responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               } else {
-                // Traemos el menú del día activo para mostrar nombres reales
-                const { data: menu } = await supabase
-                  .from('menu_diario')
-                  .select('*')
-                  .eq('activo', true)
-                  .maybeSingle();
-
                 const lineas = [];
                 for (let i = 1; i <= 2; i++) {
                   const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
                   if (cantidad > 0) {
-                    const nombre = menu?.[`Plato ${i}`] || `Plato ${i}`;
-                    lineas.push(`${cantidad} x ${nombre}`);
+                    lineas.push(`${cantidad} x Menú ${i}`);
                   }
                 }
                 for (let e = 1; e <= 3; e++) {
                   const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
                   if (cantidad > 0) {
-                    const nombre = menu?.[`entrada${e}`] || `Entrada ${e}`;
-                    lineas.push(`${cantidad} x ${nombre}`);
+                    lineas.push(`${cantidad} x Entrada ${e}`);
                   }
                 }
 
@@ -1100,9 +1093,9 @@ app.post('/flow', async (req, res) => {
                   screen: 'ORDER_DETAIL',
                   data: {
                     pedido_codigo: codigoPedido,
+                    tipo_pedido: 'el menú del día',
                     pedido_resumen: pedidoResumen,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
-                    pedido_estado: estadoUsuario.estado || 'en proceso'
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
               }
@@ -1127,9 +1120,9 @@ app.post('/flow', async (req, res) => {
                   screen: 'ORDER_DETAIL',
                   data: {
                     pedido_codigo: codigoPedido,
+                    tipo_pedido: 'la carta',
                     pedido_resumen: pedidoResumen,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
-                    pedido_estado: estadoUsuario.estado || 'en proceso'
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
               }
