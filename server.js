@@ -22,6 +22,7 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
 const NUMERO_COCINA = process.env.NUMERO_COCINA || '+3052481965';
+const NUMERO_DOMICILIOS = process.env.NUMERO_DOMICILIOS || NUMERO_COCINA;
 
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
@@ -201,9 +202,15 @@ function extraerUserIdDeFlowTokenPedido(flowToken) {
 // que sabemos con certeza que la cancelación es real, a diferencia de
 // revisar el estado al INICIO del flujo (que siempre da 'pendiente' porque
 // la cancelación todavía no ocurrió).
-async function notificarCocinaCancelacion(codigoPedido, motivo) {
+// Notifica una cancelación real por WhatsApp a un número específico
+// (cocina o domiciliario). Se llama justo después de actualizar
+// estado='cancelado' en Supabase — ese es el único momento en que sabemos
+// con certeza que la cancelación es real, a diferencia de revisar el
+// estado al INICIO del flujo (que siempre da 'pendiente' porque la
+// cancelación todavía no ocurrió).
+async function notificarCancelacion(numeroDestino, codigoPedido, motivo) {
   if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
-    console.error('No se pudo notificar a cocina: falta WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
+    console.error('No se pudo notificar: falta WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
     return;
   }
 
@@ -219,13 +226,13 @@ async function notificarCocinaCancelacion(codigoPedido, motivo) {
       body: JSON.stringify({
         messaging_product: 'whatsapp',
         recipient_type: 'individual',
-        to: NUMERO_COCINA,
+        to: numeroDestino,
         type: 'text',
         text: { body: texto }
       })
     });
   } catch (err) {
-    console.error('Error notificando a cocina:', err.message);
+    console.error('Error notificando cancelación a', numeroDestino, ':', err.message);
   }
 }
 
@@ -1228,8 +1235,21 @@ app.post('/flow', async (req, res) => {
 
             // Este es el ÚNICO punto donde sabemos con certeza que el
             // cliente confirmó la cancelación (con motivo incluido) — acá
-            // se notifica a cocina, no al inicio del flujo.
-            await notificarCocinaCancelacion(codigoPedido, motivoCancelacion);
+            // se notifica, no al inicio del flujo.
+            await notificarCancelacion(NUMERO_COCINA, codigoPedido, motivoCancelacion);
+
+            // Si hay un domicilio asignado (fila con id no vacío en
+            // "domicilios"), también se notifica al número de domicilios.
+            // Si domicilios está vacío/sin id, solo se avisa a cocina.
+            const { data: domicilio } = await supabase
+              .from('domicilios')
+              .select('id')
+              .eq('id', userId)
+              .maybeSingle();
+
+            if (domicilio && domicilio.id) {
+              await notificarCancelacion(NUMERO_DOMICILIOS, codigoPedido, motivoCancelacion);
+            }
           } catch (err) {
             console.error('Error cancelando pedido:', err.message);
           }
