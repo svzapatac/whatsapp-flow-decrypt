@@ -165,7 +165,21 @@ function encryptAES(data, aesKey, iv) {
   return Buffer.concat([encrypted, authTag]).toString('base64');
 }
 
-// ==================== ENDPOINT PRINCIPAL ====================
+// ==================== ENDPOINT SIMPLE PARA N8N (sin cifrado) ====================
+// n8n llama esto DESPUÉS de que el cliente confirma su pedido, para resolver
+// la dirección del colegio a partir del nombre que escribió.
+app.post('/buscar-colegio', (req, res) => {
+  const { nombre } = req.body;
+  const colegio = buscarColegio(nombre);
+
+  if (colegio) {
+    res.json({ encontrado: true, nombre: colegio.nombre, direccion: colegio.direccion });
+  } else {
+    res.json({ encontrado: false, nombre: null, direccion: null });
+  }
+});
+
+
 app.post('/flow', async (req, res) => {
   let decryptedAesKey, initialVector;
 
