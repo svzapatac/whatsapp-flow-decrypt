@@ -1,6 +1,7 @@
 const express = require('express');
 const crypto = require('crypto');
 const { google } = require('googleapis');
+const { createClient } = require('@supabase/supabase-js');
 
 const app = express();
 app.use(express.json());
@@ -11,6 +12,11 @@ const GOOGLE_CLIENT_EMAIL = process.env.GOOGLE_CLIENT_EMAIL;
 const GOOGLE_PRIVATE_KEY = process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 const CALENDAR_ID = process.env.CALENDAR_ID || 'potrillosterraza@gmail.com';
 const ZONA_HORARIA = 'America/Bogota';
+
+// Supabase (pedidos de comida: cancelar pedido / preguntas)
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
@@ -173,6 +179,14 @@ function obtenerUltimos4Digitos(valor) {
 // directo del protocolo de WhatsApp, sin pasar por nuestra propia lógica.
 function extraerUserIdDeFlowToken(flowToken) {
   const match = String(flowToken || '').match(/^gestionar-reserva-(\d+)-/);
+  return match ? match[1] : null;
+}
+
+// Mismo patrón que extraerUserIdDeFlowToken, pero para el Flow de
+// "Cancelar pedido / Preguntar" de comida. El flow_token debe armarse en
+// n8n como "cancelar-pedido-<user_id>-<timestamp>" al enviar este Flow.
+function extraerUserIdDeFlowTokenPedido(flowToken) {
+  const match = String(flowToken || '').match(/^cancelar-pedido-(\d+)-/);
   return match ? match[1] : null;
 }
 
@@ -1022,6 +1036,158 @@ app.post('/flow', async (req, res) => {
               hora_seleccionada: horaSeleccionada,
             }
           };
+        }
+
+        // ==================== CANCELAR PEDIDO / PREGUNTAR (comida) ====================
+
+        else if (trigger === 'menu_selection') {
+          const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
+          const opcion = decryptedBody.data.opcion;
+          const codigoPedido = obtenerUltimos4Digitos(userId);
+
+          if (opcion === 'pregunta') {
+            responseData = { screen: 'QUESTION', data: {} };
+          } else {
+            // opcion === 'cancelar' -> ubicar el pedido vigente del usuario.
+            // user_id es PRIMARY KEY tanto en "pedidos" como en
+            // "pedidos_platos_especiales", así que solo puede existir una
+            // fila por usuario en cada tabla.
+            const { data: estadoUsuario } = await supabase
+              .from('user_states')
+              .select('eleccion, estado')
+              .eq('user_id', userId)
+              .maybeSingle();
+
+            if (!estadoUsuario) {
+              responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+            } else if (estadoUsuario.eleccion === 'menu_dia') {
+              const { data: pedido } = await supabase
+                .from('pedidos')
+                .select('*')
+                .eq('user_id', userId)
+                .maybeSingle();
+
+              if (!pedido) {
+                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+              } else {
+                // Traemos el menú del día activo para mostrar nombres reales
+                const { data: menu } = await supabase
+                  .from('menu_diario')
+                  .select('*')
+                  .eq('activo', true)
+                  .maybeSingle();
+
+                const lineas = [];
+                for (let i = 1; i <= 2; i++) {
+                  const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
+                  if (cantidad > 0) {
+                    const nombre = menu?.[`Plato ${i}`] || `Plato ${i}`;
+                    lineas.push(`${cantidad} x ${nombre}`);
+                  }
+                }
+                for (let e = 1; e <= 3; e++) {
+                  const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
+                  if (cantidad > 0) {
+                    const nombre = menu?.[`entrada${e}`] || `Entrada ${e}`;
+                    lineas.push(`${cantidad} x ${nombre}`);
+                  }
+                }
+
+                const pedidoResumen = lineas.length ? lineas.join('\n') : 'Sin platos registrados';
+                const pedidoTotal = Number(pedido.costo_total) || 0;
+
+                responseData = {
+                  screen: 'ORDER_DETAIL',
+                  data: {
+                    pedido_codigo: codigoPedido,
+                    pedido_resumen: pedidoResumen,
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
+                    pedido_estado: estadoUsuario.estado || 'en proceso'
+                  }
+                };
+              }
+            } else {
+              // Pedido a la carta (pedidos_platos_especiales)
+              const { data: pedido } = await supabase
+                .from('pedidos_platos_especiales')
+                .select('*')
+                .eq('user_id', userId)
+                .maybeSingle();
+
+              if (!pedido) {
+                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+              } else {
+                const detallePedido = pedido.pedido || {};
+                const pedidoResumen = typeof detallePedido === 'object'
+                  ? JSON.stringify(detallePedido, null, 2)
+                  : String(detallePedido);
+                const pedidoTotal = Number(pedido.costo_total) || 0;
+
+                responseData = {
+                  screen: 'ORDER_DETAIL',
+                  data: {
+                    pedido_codigo: codigoPedido,
+                    pedido_resumen: pedidoResumen,
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
+                    pedido_estado: estadoUsuario.estado || 'en proceso'
+                  }
+                };
+              }
+            }
+          }
+        }
+
+        else if (trigger === 'confirmar_cancelacion_pedido') {
+          const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
+          const motivoCancelacion = decryptedBody.data.motivo_cancelacion || '';
+          const codigoPedido = decryptedBody.data.pedido_codigo || obtenerUltimos4Digitos(userId);
+
+          const { data: estadoUsuario } = await supabase
+            .from('user_states')
+            .select('eleccion')
+            .eq('user_id', userId)
+            .maybeSingle();
+
+          const tabla = estadoUsuario?.eleccion === 'menu_dia'
+            ? 'pedidos'
+            : 'pedidos_platos_especiales';
+
+          try {
+            await supabase.from(tabla).delete().eq('user_id', userId);
+
+            await supabase
+              .from('user_states')
+              .update({
+                estado: 'nuevo',
+                eleccion: null,
+                menu: '',
+                entrega: '',
+                direccion: '',
+                pago: '',
+                entrada: '',
+                plato_principal: '',
+                modificacion: motivoCancelacion,
+                cantidad: 1
+              })
+              .eq('user_id', userId);
+          } catch (err) {
+            console.error('Error cancelando pedido:', err.message);
+          }
+
+          responseData = {
+            screen: 'SUCCESS_CANCEL',
+            data: { pedido_codigo: codigoPedido }
+          };
+        }
+
+        else if (trigger === 'enviar_pregunta_pedido') {
+          const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
+          const pregunta = decryptedBody.data.pregunta || '';
+
+          console.log('=== PREGUNTA RECIBIDA ===');
+          console.log('user_id:', userId, '| pregunta:', pregunta);
+
+          responseData = { screen: 'SUCCESS_QUESTION', data: {} };
         }
 
         else {
