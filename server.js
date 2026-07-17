@@ -1149,7 +1149,6 @@ app.post('/flow', async (req, res) => {
         else if (trigger === 'confirmar_cancelacion_pedido') {
           const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
           const motivoCancelacion = decryptedBody.data.motivo_cancelacion || '';
-          const codigoPedido = decryptedBody.data.pedido_codigo || obtenerUltimos4Digitos(userId);
 
           const { data: estadoUsuario } = await supabase
             .from('user_states')
@@ -1192,7 +1191,7 @@ app.post('/flow', async (req, res) => {
 
           responseData = {
             screen: 'SUCCESS_CANCEL',
-            data: { pedido_codigo: codigoPedido }
+            data: {}
           };
         }
 
