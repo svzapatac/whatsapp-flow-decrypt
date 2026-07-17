@@ -1072,27 +1072,14 @@ app.post('/flow', async (req, res) => {
               if (!pedido) {
                 responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               } else {
-                const lineas = [];
-                for (let i = 1; i <= 2; i++) {
-                  const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
-                  if (cantidad > 0) {
-                    lineas.push(`${cantidad} x Menú ${i}`);
-                  }
-                }
-                for (let e = 1; e <= 3; e++) {
-                  const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
-                  if (cantidad > 0) {
-                    lineas.push(`${cantidad} x Entrada ${e}`);
-                  }
-                }
-
-                const pedidoResumen = lineas.length ? lineas.join('\n') : 'Sin platos registrados';
                 const pedidoTotal = Number(pedido.costo_total) || 0;
 
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
-                    pedido_codigo: codigoPedido
+                    pedido_codigo: codigoPedido,
+                    pedido_resumen: pedido.mensaje_cocina || 'Sin detalle disponible',
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
               }
@@ -1107,16 +1094,14 @@ app.post('/flow', async (req, res) => {
               if (!pedido) {
                 responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               } else {
-                const detallePedido = pedido.pedido || {};
-                const pedidoResumen = typeof detallePedido === 'object'
-                  ? JSON.stringify(detallePedido, null, 2)
-                  : String(detallePedido);
                 const pedidoTotal = Number(pedido.costo_total) || 0;
 
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
-                    pedido_codigo: codigoPedido
+                    pedido_codigo: codigoPedido,
+                    pedido_resumen: pedido.mensaje_cocina || 'Sin detalle disponible',
+                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
               }
