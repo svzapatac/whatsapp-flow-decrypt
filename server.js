@@ -1092,10 +1092,7 @@ app.post('/flow', async (req, res) => {
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
-                    pedido_codigo: codigoPedido,
-                    tipo_pedido: 'el menú del día',
-                    pedido_resumen: pedidoResumen,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
+                    pedido_codigo: codigoPedido
                   }
                 };
               }
@@ -1119,10 +1116,7 @@ app.post('/flow', async (req, res) => {
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
-                    pedido_codigo: codigoPedido,
-                    tipo_pedido: 'la carta',
-                    pedido_resumen: pedidoResumen,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
+                    pedido_codigo: codigoPedido
                   }
                 };
               }
