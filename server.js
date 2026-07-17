@@ -1072,13 +1072,37 @@ app.post('/flow', async (req, res) => {
               if (!pedido) {
                 responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               } else {
+                const lineas = [];
+                for (let i = 1; i <= 2; i++) {
+                  const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
+                  if (cantidad > 0) {
+                    lineas.push(`${cantidad} x Menú ${i}`);
+                  }
+                }
+                for (let e = 1; e <= 3; e++) {
+                  const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
+                  if (cantidad > 0) {
+                    lineas.push(`${cantidad} x Entrada ${e}`);
+                  }
+                }
+
                 const pedidoTotal = Number(pedido.costo_total) || 0;
+
+                // Todo combinado en UN SOLO string: WhatsApp Flow no resuelve
+                // bien cuando se mezcla texto fijo + variable en un mismo
+                // componente, así que armamos acá el texto completo ya
+                // formateado y lo mandamos como un único campo.
+                const resumenCompleto =
+                  `Pedido #${codigoPedido}\n` +
+                  `Tienes esto:\n` +
+                  (lineas.length ? lineas.join('\n') : 'Sin platos registrados') +
+                  `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
 
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
                     pedido_codigo: codigoPedido,
-                    pedido_resumen: pedido.mensaje_cocina || 'Sin detalle disponible',
+                    pedido_resumen: resumenCompleto,
                     pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
@@ -1094,13 +1118,26 @@ app.post('/flow', async (req, res) => {
               if (!pedido) {
                 responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               } else {
+                const detallePedido = pedido.pedido || {};
+                const detalleTexto = typeof detallePedido === 'object'
+                  ? Object.entries(detallePedido).map(([k, v]) => `${k}: ${v}`).join('\n')
+                  : String(detallePedido);
+
                 const pedidoTotal = Number(pedido.costo_total) || 0;
+
+                // Todo combinado en UN SOLO string, mismo motivo que arriba:
+                // WhatsApp Flow no resuelve bien texto fijo + variable mezclados.
+                const resumenCompleto =
+                  `Pedido #${codigoPedido}\n` +
+                  `Tienes esto (a la carta):\n` +
+                  (detalleTexto || 'Sin detalle registrado') +
+                  `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
 
                 responseData = {
                   screen: 'ORDER_DETAIL',
                   data: {
                     pedido_codigo: codigoPedido,
-                    pedido_resumen: pedido.mensaje_cocina || 'Sin detalle disponible',
+                    pedido_resumen: resumenCompleto,
                     pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
@@ -1125,7 +1162,14 @@ app.post('/flow', async (req, res) => {
             : 'pedidos_platos_especiales';
 
           try {
-            await supabase.from(tabla).delete().eq('user_id', userId);
+            // Ya no borramos la fila: solo marcamos el pedido como cancelado.
+            // Así queda historial de qué se pidió y por qué se canceló.
+            await supabase
+              .from(tabla)
+              .update({
+                estado: 'cancelado'
+              })
+              .eq('user_id', userId);
 
             await supabase
               .from('user_states')
@@ -1160,6 +1204,47 @@ app.post('/flow', async (req, res) => {
           console.log('user_id:', userId, '| pregunta:', pregunta);
 
           responseData = { screen: 'SUCCESS_QUESTION', data: {} };
+        }
+
+        // ==================== TOMA DE PEDIDO: PLATOS -> ENTRADAS ====================
+
+        else if (trigger === 'plato_a_entradas') {
+          const plato1 = decryptedBody.data.plato1 || '';
+          const plato2 = decryptedBody.data.plato2 || '';
+          const comentariosPlatos = decryptedBody.data.comentarios_platos || '';
+
+          const { data: menu } = await supabase
+            .from('menu_diario')
+            .select('*')
+            .eq('activo', true)
+            .maybeSingle();
+
+          // Si el campo de esa entrada viene vacío/null en el menú del día,
+          // se muestra como no disponible. El emoji + texto van armados
+          // acá mismo en un solo string (WhatsApp Flow no interpola bien
+          // si se mezcla texto fijo con variable en el mismo componente).
+          function labelEntrada(nombreFijo, valorMenu, emojiDisponible) {
+            const vacio = valorMenu === null || valorMenu === undefined || String(valorMenu).trim() === '';
+            return vacio
+              ? `❌ ${nombreFijo} ya no está disponible`
+              : `${emojiDisponible} ${nombreFijo}`;
+          }
+
+          const labelSopa = labelEntrada('Sopa del día', menu?.entrada1, '🥣');
+          const labelArroz = labelEntrada('Arroz con leche', menu?.entrada2, '🍮');
+          const labelFruta = labelEntrada('Fruta', menu?.entrada3, '🍎');
+
+          responseData = {
+            screen: 'ENTRADAS',
+            data: {
+              plato1,
+              plato2,
+              comentarios_platos: comentariosPlatos,
+              label_sopa: labelSopa,
+              label_arroz: labelArroz,
+              label_fruta: labelFruta
+            }
+          };
         }
 
         else {
