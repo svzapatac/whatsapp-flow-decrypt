@@ -1256,7 +1256,10 @@ app.post('/flow', async (req, res) => {
 
           responseData = {
             screen: 'SUCCESS_CANCEL',
-            data: {}
+            data: {
+              pedido_codigo: codigoPedido,
+              motivo_cancelacion: motivoCancelacion
+            }
           };
         }
 
@@ -1267,7 +1270,7 @@ app.post('/flow', async (req, res) => {
           console.log('=== PREGUNTA RECIBIDA ===');
           console.log('user_id:', userId, '| pregunta:', pregunta);
 
-          responseData = { screen: 'SUCCESS_QUESTION', data: {} };
+          responseData = { screen: 'SUCCESS_QUESTION', data: { pregunta } };
         }
 
         // ==================== TOMA DE PEDIDO: PLATOS -> ENTRADAS ====================
