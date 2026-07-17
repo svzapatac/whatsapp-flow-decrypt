@@ -18,6 +18,11 @@ const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
+// WhatsApp Cloud API (para notificar a cocina cuando se confirma una cancelación)
+const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN;
+const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID;
+const NUMERO_COCINA = process.env.NUMERO_COCINA || '+3052481965';
+
 const auth = new google.auth.JWT(
   GOOGLE_CLIENT_EMAIL,
   null,
@@ -188,6 +193,40 @@ function extraerUserIdDeFlowToken(flowToken) {
 function extraerUserIdDeFlowTokenPedido(flowToken) {
   const match = String(flowToken || '').match(/^cancelar-pedido-(\d+)-/);
   return match ? match[1] : null;
+}
+
+// Notifica a cocina que un pedido fue REALMENTE cancelado (el cliente ya
+// confirmó, con motivo, a través del Flow). Se llama justo después de
+// actualizar estado='cancelado' en Supabase — ese es el único momento en
+// que sabemos con certeza que la cancelación es real, a diferencia de
+// revisar el estado al INICIO del flujo (que siempre da 'pendiente' porque
+// la cancelación todavía no ocurrió).
+async function notificarCocinaCancelacion(codigoPedido, motivo) {
+  if (!WHATSAPP_TOKEN || !WHATSAPP_PHONE_NUMBER_ID) {
+    console.error('No se pudo notificar a cocina: falta WHATSAPP_TOKEN o WHATSAPP_PHONE_NUMBER_ID');
+    return;
+  }
+
+  const texto = `Pedido #${codigoPedido}\nCANCELADO por el cliente${motivo ? `\nMotivo: ${motivo}` : ''}`;
+
+  try {
+    await fetch(`https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        messaging_product: 'whatsapp',
+        recipient_type: 'individual',
+        to: NUMERO_COCINA,
+        type: 'text',
+        text: { body: texto }
+      })
+    });
+  } catch (err) {
+    console.error('Error notificando a cocina:', err.message);
+  }
 }
 
 // Busca en Google Calendar el próximo evento (dentro de los próximos 90 días)
@@ -1149,6 +1188,7 @@ app.post('/flow', async (req, res) => {
         else if (trigger === 'confirmar_cancelacion_pedido') {
           const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
           const motivoCancelacion = decryptedBody.data.motivo_cancelacion || '';
+          const codigoPedido = obtenerUltimos4Digitos(userId);
 
           const { data: estadoUsuario } = await supabase
             .from('user_states')
@@ -1185,6 +1225,11 @@ app.post('/flow', async (req, res) => {
                 cantidad: 1
               })
               .eq('user_id', userId);
+
+            // Este es el ÚNICO punto donde sabemos con certeza que el
+            // cliente confirmó la cancelación (con motivo incluido) — acá
+            // se notifica a cocina, no al inicio del flujo.
+            await notificarCocinaCancelacion(codigoPedido, motivoCancelacion);
           } catch (err) {
             console.error('Error cancelando pedido:', err.message);
           }
