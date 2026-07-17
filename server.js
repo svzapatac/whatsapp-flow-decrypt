@@ -1207,6 +1207,7 @@ app.post('/flow', async (req, res) => {
     const responseIv = Buffer.from(initialVector.map(byte => ~byte & 0xFF));
 
     // 6. Encriptar respuesta
+    console.log('responseData (sin cifrar):', JSON.stringify(responseData));
     const encryptedResponse = encryptAES(responseData, decryptedAesKey, responseIv);
 
     console.log('=== RESPONSE DEBUG ===');
