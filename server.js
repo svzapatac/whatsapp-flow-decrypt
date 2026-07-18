@@ -1110,17 +1110,32 @@ app.post('/flow', async (req, res) => {
 
             if (!estadoUsuario) {
               responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
-            } else if (estadoUsuario.eleccion === 'menu_dia') {
-              const { data: pedido } = await supabase
+            } else {
+              // Ya NO usamos "eleccion" para decidir en cuál tabla buscar:
+              // eleccion refleja la ÚLTIMA opción de menú que tocó el
+              // cliente (puede haber navegado a "otros" DESPUÉS de haber
+              // pedido, dejando eleccion desactualizado respecto a dónde
+              // vive realmente su pedido). En vez de eso, buscamos el
+              // pedido activo directamente en las dos tablas posibles y
+              // usamos la que sí tenga uno.
+              const { data: pedidoMenuDia } = await supabase
                 .from('pedidos')
                 .select('*')
                 .eq('user_id', userId)
                 .eq('activa', true)
                 .maybeSingle();
 
-              if (!pedido) {
-                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
-              } else {
+              const { data: pedidoCarta } = pedidoMenuDia
+                ? { data: null }
+                : await supabase
+                    .from('pedidos_platos_especiales')
+                    .select('*')
+                    .eq('user_id', userId)
+                    .eq('activa', true)
+                    .maybeSingle();
+
+              if (pedidoMenuDia) {
+                const pedido = pedidoMenuDia;
                 const lineas = [];
                 for (let i = 1; i <= 2; i++) {
                   const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
@@ -1155,19 +1170,8 @@ app.post('/flow', async (req, res) => {
                     pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
-              }
-            } else {
-              // Pedido a la carta (pedidos_platos_especiales)
-              const { data: pedido } = await supabase
-                .from('pedidos_platos_especiales')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('activa', true)
-                .maybeSingle();
-
-              if (!pedido) {
-                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
-              } else {
+              } else if (pedidoCarta) {
+                const pedido = pedidoCarta;
                 const detallePedido = pedido.pedido || {};
                 const detalleTexto = typeof detallePedido === 'object'
                   ? Object.entries(detallePedido).map(([k, v]) => `${k}: ${v}`).join('\n')
@@ -1191,6 +1195,8 @@ app.post('/flow', async (req, res) => {
                     pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
                   }
                 };
+              } else {
+                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
               }
             }
           }
@@ -1201,16 +1207,18 @@ app.post('/flow', async (req, res) => {
           const motivoCancelacion = decryptedBody.data.motivo_cancelacion || '';
           const codigoPedido = obtenerUltimos4Digitos(userId);
 
-          const { data: estadoUsuario } = await supabase
-            .from('user_states')
-            .select('eleccion')
+          // Mismo motivo que en menu_selection: "eleccion" puede estar
+          // desactualizado si el cliente navegó a otro menú después de
+          // pedir. En vez de confiar en eleccion, revisamos directamente
+          // cuál de las dos tablas tiene el pedido activo de este cliente.
+          const { data: pedidoMenuDia } = await supabase
+            .from('pedidos')
+            .select('user_id')
             .eq('user_id', userId)
             .eq('activa', true)
             .maybeSingle();
 
-          const tabla = estadoUsuario?.eleccion === 'menu_dia'
-            ? 'pedidos'
-            : 'pedidos_platos_especiales';
+          const tabla = pedidoMenuDia ? 'pedidos' : 'pedidos_platos_especiales';
 
           try {
             // Ya no borramos la fila: solo marcamos el pedido como cancelado.
