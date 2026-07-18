@@ -1097,13 +1097,15 @@ app.post('/flow', async (req, res) => {
             responseData = { screen: 'QUESTION', data: {} };
           } else {
             // opcion === 'cancelar' -> ubicar el pedido vigente del usuario.
-            // user_id es PRIMARY KEY tanto en "pedidos" como en
-            // "pedidos_platos_especiales", así que solo puede existir una
-            // fila por usuario en cada tabla.
+            // user_id YA NO es PRIMARY KEY ni en "pedidos" ni en
+            // "pedidos_platos_especiales" (un cliente puede tener varias
+            // filas históricas). Por eso ahora filtramos también por
+            // activa=true para traer siempre la sesión/pedido EN CURSO.
             const { data: estadoUsuario } = await supabase
               .from('user_states')
               .select('eleccion, estado')
               .eq('user_id', userId)
+              .eq('activa', true)
               .maybeSingle();
 
             if (!estadoUsuario) {
@@ -1113,6 +1115,7 @@ app.post('/flow', async (req, res) => {
                 .from('pedidos')
                 .select('*')
                 .eq('user_id', userId)
+                .eq('activa', true)
                 .maybeSingle();
 
               if (!pedido) {
@@ -1159,6 +1162,7 @@ app.post('/flow', async (req, res) => {
                 .from('pedidos_platos_especiales')
                 .select('*')
                 .eq('user_id', userId)
+                .eq('activa', true)
                 .maybeSingle();
 
               if (!pedido) {
@@ -1201,6 +1205,7 @@ app.post('/flow', async (req, res) => {
             .from('user_states')
             .select('eleccion')
             .eq('user_id', userId)
+            .eq('activa', true)
             .maybeSingle();
 
           const tabla = estadoUsuario?.eleccion === 'menu_dia'
@@ -1210,13 +1215,25 @@ app.post('/flow', async (req, res) => {
           try {
             // Ya no borramos la fila: solo marcamos el pedido como cancelado.
             // Así queda historial de qué se pidió y por qué se canceló.
+            // Filtramos por activa=true para tocar SOLO el pedido en curso
+            // (user_id ya no es único, puede haber pedidos viejos del mismo
+            // cliente). También marcamos activa=false: un pedido cancelado
+            // ya no es "el pedido actual" para futuras consultas.
             await supabase
               .from(tabla)
               .update({
-                estado: 'cancelado'
+                estado: 'cancelado',
+                activa: false
               })
-              .eq('user_id', userId);
+              .eq('user_id', userId)
+              .eq('activa', true);
 
+            // Igual que arriba: filtramos por activa=true para resetear
+            // SOLO la sesión en curso del cliente, no una vieja.
+            // (No tocamos el campo "activa" aquí -- dejar la sesión activa
+            // tras el reset a "nuevo" fue una decisión deliberada, ya que
+            // el cliente sigue conversando ahora mismo. Si prefieres que
+            // esto también cierre la sesión, dímelo y lo ajusto.)
             await supabase
               .from('user_states')
               .update({
@@ -1231,20 +1248,24 @@ app.post('/flow', async (req, res) => {
                 modificacion: motivoCancelacion,
                 cantidad: 1
               })
-              .eq('user_id', userId);
+              .eq('user_id', userId)
+              .eq('activa', true);
 
             // Este es el ÚNICO punto donde sabemos con certeza que el
             // cliente confirmó la cancelación (con motivo incluido) — acá
             // se notifica, no al inicio del flujo.
             await notificarCancelacion(NUMERO_COCINA, codigoPedido, motivoCancelacion);
 
-            // Si hay un domicilio asignado (fila con id no vacío en
-            // "domicilios"), también se notifica al número de domicilios.
-            // Si domicilios está vacío/sin id, solo se avisa a cocina.
+            // Si hay un domicilio asignado (fila activa para este cliente
+            // en "domicilios"), también se notifica al número de
+            // domicilios. Si no hay domicilio activo, solo se avisa a cocina.
+            // OJO: "id" en domicilios ya NO es el teléfono (ahora es un
+            // uuid autogenerado) -- el teléfono vive en "user_id".
             const { data: domicilio } = await supabase
               .from('domicilios')
               .select('id')
-              .eq('id', userId)
+              .eq('user_id', userId)
+              .eq('activa', true)
               .maybeSingle();
 
             if (domicilio && domicilio.id) {
