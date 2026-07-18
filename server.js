@@ -112,7 +112,51 @@ function generarSlots(horaInicio, horaFin, intervaloMinutos = 30) {
   return slots;
 }
 
-function slotsDelDiaSegunDiaSemana(diaSemana) {
+// ==================== FESTIVOS DE COLOMBIA ====================
+// Usamos el mismo calendario público que usa Google Calendar (el que
+// se ve en tu captura: "Día de la Independencia" el 20 de julio). No
+// necesita credenciales nuevas -- se consulta con el mismo cliente
+// "calendar" ya autenticado, solo que apuntando a un calendarId distinto.
+const CALENDARIO_FESTIVOS_CO = 'en.co.official#holiday@group.v.calendar.google.com';
+
+// Cache en memoria por año, para no consultar la API en cada mensaje.
+const festivosCachePorAnio = {};
+
+async function obtenerFestivosDelAnio(anio) {
+  if (festivosCachePorAnio[anio]) return festivosCachePorAnio[anio];
+
+  const inicio = new Date(`${anio}-01-01T00:00:00`);
+  const fin = new Date(`${anio}-12-31T23:59:59`);
+
+  const events = await calendar.events.list({
+    calendarId: CALENDARIO_FESTIVOS_CO,
+    timeMin: inicio.toISOString(),
+    timeMax: fin.toISOString(),
+    singleEvents: true,
+    orderBy: 'startTime',
+  });
+
+  const fechas = new Set(
+    (events.data.items || []).map(ev => ev.start.date || ev.start.dateTime?.slice(0, 10))
+  );
+
+  festivosCachePorAnio[anio] = fechas;
+  return fechas;
+}
+
+// dateStr en formato "YYYY-MM-DD"
+async function esFestivoColombia(dateStr) {
+  const anio = dateStr.slice(0, 4);
+  const festivosDelAnio = await obtenerFestivosDelAnio(anio);
+  return festivosDelAnio.has(dateStr);
+}
+
+// Ahora es asíncrona porque necesita consultar (o leer del cache) si la
+// fecha es festivo. Reglas de negocio:
+//   - Domingo: 12:00-13:30 y 16:30-19:00 (igual que antes)
+//   - Festivo (lunes a sábado): 12:00pm-7:00pm
+//   - Lunes a sábado normal: 12:00pm-9:00pm
+async function slotsDelDiaSegunDiaSemana(dateStr, diaSemana) {
   if (diaSemana === 0) {
     // Domingo: 12:00-13:30 y 16:30-19:00
     return [
@@ -120,7 +164,14 @@ function slotsDelDiaSegunDiaSemana(diaSemana) {
       ...generarSlots('16:30', '19:00')
     ];
   }
-  // Lunes a Sábado: 12:00-21:00 (9:00 PM incluida)
+
+  const esFestivo = await esFestivoColombia(dateStr);
+  if (esFestivo) {
+    // Festivo (lunes a sábado): 12:00pm-7:00pm
+    return generarSlots('12:00', '19:00');
+  }
+
+  // Lunes a Sábado normal: 12:00-21:00 (9:00 PM incluida)
   return generarSlots('12:00', '21:00');
 }
 
@@ -275,6 +326,27 @@ async function buscarReservaPorCodigo(codigo) {
   };
 }
 
+// Aplica las reglas de cupo sobre una lista de slots ya generada para un
+// día específico:
+//   - Domingo: 20 max por horario, EXCEPTO el slot de 1:00pm-1:30pm que
+//     tiene un tope especial de 5. No aplica el límite de 80/día.
+//   - Lunes a sábado (festivo o no): 20 max por horario, Y ADEMÁS si el
+//     total de reservas del día ya llegó a 80, no se ofrece NINGÚN
+//     horario más ese día (el día queda lleno aunque haya slots con
+//     cupo individual).
+function filtrarHorariosDisponibles(slotsDelDia, reservasPorHora, esDomingo) {
+  if (!esDomingo) {
+    const totalReservasDelDia = Object.values(reservasPorHora).reduce((sum, n) => sum + n, 0);
+    if (totalReservasDelDia >= 80) return [];
+  }
+
+  return slotsDelDia.filter(slot => {
+    const reservas = reservasPorHora[slot.id] || 0;
+    const limite = (esDomingo && slot.id === '13:00') ? 5 : 20;
+    return reservas < limite;
+  });
+}
+
 async function obtenerFechasDisponibles() {
   const ahoraReal = new Date();
   const ahoraBogota = ahoraEnBogota();
@@ -307,15 +379,16 @@ async function obtenerFechasDisponibles() {
     const dateStr = `${diaBogota.getFullYear()}-${String(diaBogota.getMonth() + 1).padStart(2, '0')}-${String(diaBogota.getDate()).padStart(2, '0')}`;
     const diaSemana = diaBogota.getDay();
 
-    let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+    let slotsDelDia = await slotsDelDiaSegunDiaSemana(dateStr, diaSemana);
 
     // Si el día es hoy, quitar las horas que ya pasaron ANTES de revisar disponibilidad
     slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, dateStr);
 
-    const slotsDisponibles = slotsDelDia.filter(slot => {
-      const reservas = reservasPorFechaHora[dateStr]?.[slot.id] || 0;
-      return reservas < 20;
-    });
+    const slotsDisponibles = filtrarHorariosDisponibles(
+      slotsDelDia,
+      reservasPorFechaHora[dateStr] || {},
+      diaSemana === 0
+    );
 
     if (slotsDisponibles.length > 0) {
       const options = { weekday: 'long', day: 'numeric', month: 'long' };
@@ -602,15 +675,16 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
 
           // Quitar horas ya pasadas si la fecha elegida es hoy
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           const comboAdicional = decryptedBody.data.combo_adicional || 'no';
           const cantidadCombos = decryptedBody.data.cantidad_combos || '0';
@@ -677,13 +751,14 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           responseData = {
             screen: 'SELECCION_HORARIO_SIN_TEMATICA',
@@ -738,13 +813,14 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           responseData = {
             screen: 'SELECCION_HORARIO_BAUTIZO',
@@ -802,13 +878,14 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           responseData = {
             screen: 'SELECCION_HORARIO',
@@ -867,13 +944,14 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           responseData = {
             screen: 'SELECCION_HORARIO',
@@ -1028,13 +1106,14 @@ app.post('/flow', async (req, res) => {
             reservasPorHora[hora]++;
           });
 
-          let slotsDelDia = slotsDelDiaSegunDiaSemana(diaSemana);
+          let slotsDelDia = await slotsDelDiaSegunDiaSemana(fechaSeleccionada, diaSemana);
           slotsDelDia = quitarHorasPasadasSiEsHoy(slotsDelDia, fechaSeleccionada);
 
-          const horariosDisponibles = slotsDelDia.filter(slot => {
-            const reservas = reservasPorHora[slot.id] || 0;
-            return reservas < 20;
-          });
+          const horariosDisponibles = filtrarHorariosDisponibles(
+            slotsDelDia,
+            reservasPorHora,
+            diaSemana === 0
+          );
 
           responseData = {
             screen: 'SELECCION_NUEVA_HORA',
