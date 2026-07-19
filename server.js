@@ -1050,8 +1050,8 @@ app.post('/flow', async (req, res) => {
 
           if (reservas.length === 0) {
             responseData = {
-              screen: 'NO_SE_ENCONTRO_RESERVA',
-              data: { opcion_menu: opcionMenu }
+              screen: 'RESERVA_NO_ENCONTRADA_FINAL',
+              data: {}
             };
           } else {
             const opcionesReservas = reservas.map(r => ({
@@ -1093,8 +1093,8 @@ app.post('/flow', async (req, res) => {
           } catch (err) {
             console.error('Error obteniendo la reserva seleccionada:', err.message);
             responseData = {
-              screen: 'NO_SE_ENCONTRO_RESERVA',
-              data: { opcion_menu: opcionMenu }
+              screen: 'RESERVA_NO_ENCONTRADA_FINAL',
+              data: {}
             };
           }
         }
