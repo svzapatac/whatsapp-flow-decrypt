@@ -1175,108 +1175,145 @@ app.post('/flow', async (req, res) => {
           if (opcion === 'pregunta') {
             responseData = { screen: 'QUESTION', data: {} };
           } else {
-            // opcion === 'cancelar' -> ubicar el pedido vigente del usuario.
-            // user_id YA NO es PRIMARY KEY ni en "pedidos" ni en
-            // "pedidos_platos_especiales" (un cliente puede tener varias
-            // filas históricas). Por eso ahora filtramos también por
-            // activa=true para traer siempre la sesión/pedido EN CURSO.
-            const { data: estadoUsuario } = await supabase
-              .from('user_states')
-              .select('eleccion, estado')
+            // opcion === 'cancelar' -> ya NO existe "el" pedido activo:
+            // un cliente puede tener varios pedidos recientes (en "pedidos"
+            // y/o en "pedidos_platos_especiales"), así que en vez de filtrar
+            // por activa=true traemos los últimos 3 (por recencia) entre
+            // ambas tablas y dejamos que el cliente elija cuál cancelar.
+            const { data: ultimosPedidos } = await supabase
+              .from('pedidos')
+              .select('*')
               .eq('user_id', userId)
-              .eq('activa', true)
-              .maybeSingle();
+              .order('hora_inicio', { ascending: false })
+              .limit(3);
 
-            if (!estadoUsuario) {
+            const { data: ultimosCarta } = await supabase
+              .from('pedidos_platos_especiales')
+              .select('*')
+              .eq('user_id', userId)
+              .order('hora_inicio', { ascending: false })
+              .limit(3);
+
+            // Etiquetamos cada fila con su tabla de origen para poder
+            // reconstruir "tabla:id" como identificador único más abajo,
+            // y para saber cómo armar el resumen (menú del día vs. carta).
+            const combinados = [
+              ...(ultimosPedidos || []).map(p => ({ ...p, __tabla: 'pedidos' })),
+              ...(ultimosCarta || []).map(p => ({ ...p, __tabla: 'pedidos_platos_especiales' }))
+            ]
+              .sort((a, b) => new Date(b.hora_inicio) - new Date(a.hora_inicio))
+              .slice(0, 3);
+
+            if (combinados.length === 0) {
               responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
             } else {
-              // Ya NO usamos "eleccion" para decidir en cuál tabla buscar:
-              // eleccion refleja la ÚLTIMA opción de menú que tocó el
-              // cliente (puede haber navegado a "otros" DESPUÉS de haber
-              // pedido, dejando eleccion desactualizado respecto a dónde
-              // vive realmente su pedido). En vez de eso, buscamos el
-              // pedido activo directamente en las dos tablas posibles y
-              // usamos la que sí tenga uno.
-              const { data: pedidoMenuDia } = await supabase
-                .from('pedidos')
-                .select('*')
-                .eq('user_id', userId)
-                .eq('activa', true)
-                .maybeSingle();
-
-              const { data: pedidoCarta } = pedidoMenuDia
-                ? { data: null }
-                : await supabase
-                    .from('pedidos_platos_especiales')
-                    .select('*')
-                    .eq('user_id', userId)
-                    .eq('activa', true)
-                    .maybeSingle();
-
-              if (pedidoMenuDia) {
-                const pedido = pedidoMenuDia;
-                const lineas = [];
-                for (let i = 1; i <= 2; i++) {
-                  const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
-                  if (cantidad > 0) {
-                    lineas.push(`${cantidad} x Menú ${i}`);
-                  }
-                }
-                for (let e = 1; e <= 3; e++) {
-                  const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
-                  if (cantidad > 0) {
-                    lineas.push(`${cantidad} x Entrada ${e}`);
-                  }
-                }
-
-                const pedidoTotal = Number(pedido.costo_total) || 0;
-
-                // Todo combinado en UN SOLO string: WhatsApp Flow no resuelve
-                // bien cuando se mezcla texto fijo + variable en un mismo
-                // componente, así que armamos acá el texto completo ya
-                // formateado y lo mandamos como un único campo.
-                const resumenCompleto =
-                  `Pedido #${codigoPedido}\n` +
-                  `Tienes esto:\n` +
-                  (lineas.length ? lineas.join('\n') : 'Sin platos registrados') +
-                  `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
-
-                responseData = {
-                  screen: 'ORDER_DETAIL',
-                  data: {
-                    pedido_codigo: codigoPedido,
-                    pedido_resumen: resumenCompleto,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
-                  }
+              // Título corto por opción: fecha/hora (Bogotá) + total, para
+              // que el cliente distingue entre sus últimos pedidos aunque
+              // el "código" (últimos 4 dígitos del teléfono) sea el mismo
+              // para todos ellos.
+              const opcionesPedidos = combinados.map(p => {
+                const { fecha, hora } = obtenerFechaHoraBogota(new Date(p.hora_inicio));
+                const total = Number(p.costo_total) || 0;
+                const tipo = p.__tabla === 'pedidos' ? 'Menú del día' : 'A la carta';
+                return {
+                  id: `${p.__tabla}:${p.id}`,
+                  title: `${fecha} ${hora} · ${tipo} · $${total.toLocaleString('es-CO')}`
                 };
-              } else if (pedidoCarta) {
-                const pedido = pedidoCarta;
-                const detallePedido = pedido.pedido || {};
-                const detalleTexto = typeof detallePedido === 'object'
-                  ? Object.entries(detallePedido).map(([k, v]) => `${k}: ${v}`).join('\n')
-                  : String(detallePedido);
+              });
 
-                const pedidoTotal = Number(pedido.costo_total) || 0;
+              responseData = {
+                screen: 'SELECT_ORDER',
+                data: {
+                  pedido_codigo: codigoPedido,
+                  opciones_pedidos: opcionesPedidos
+                }
+              };
+            }
+          }
+        }
 
-                // Todo combinado en UN SOLO string, mismo motivo que arriba:
-                // WhatsApp Flow no resuelve bien texto fijo + variable mezclados.
-                const resumenCompleto =
-                  `Pedido #${codigoPedido}\n` +
-                  `Tienes esto (a la carta):\n` +
-                  (detalleTexto || 'Sin detalle registrado') +
-                  `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
+        else if (trigger === 'seleccionar_pedido_cancelar') {
+          const userId = extraerUserIdDeFlowTokenPedido(decryptedBody.flow_token);
+          const codigoPedido = obtenerUltimos4Digitos(userId);
 
-                responseData = {
-                  screen: 'ORDER_DETAIL',
-                  data: {
-                    pedido_codigo: codigoPedido,
-                    pedido_resumen: resumenCompleto,
-                    pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`
-                  }
-                };
-              } else {
-                responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+          // Viene como "tabla:id" desde la opción elegida en SELECT_ORDER.
+          const seleccion = decryptedBody.data.pedido_seleccionado || '';
+          const separador = seleccion.indexOf(':');
+          const tabla = separador === -1 ? '' : seleccion.slice(0, separador);
+          const pedidoId = separador === -1 ? '' : seleccion.slice(separador + 1);
+
+          if (tabla !== 'pedidos' && tabla !== 'pedidos_platos_especiales') {
+            responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+          } else {
+            // Filtramos también por user_id: aunque el id ya es único,
+            // esto evita que alguien pueda cancelar un pedido ajeno
+            // manipulando el payload del Flow.
+            const { data: pedido } = await supabase
+              .from(tabla)
+              .select('*')
+              .eq('id', pedidoId)
+              .eq('user_id', userId)
+              .maybeSingle();
+
+            if (!pedido) {
+              responseData = { screen: 'ABORTED', data: { pedido_codigo: codigoPedido } };
+            } else if (tabla === 'pedidos') {
+              const lineas = [];
+              for (let i = 1; i <= 2; i++) {
+                const cantidad = Number(pedido[`cantidad_plato${i}`]) || 0;
+                if (cantidad > 0) {
+                  lineas.push(`${cantidad} x Menú ${i}`);
+                }
               }
+              for (let e = 1; e <= 3; e++) {
+                const cantidad = Number(pedido[`cantidad_entrada${e}`]) || 0;
+                if (cantidad > 0) {
+                  lineas.push(`${cantidad} x Entrada ${e}`);
+                }
+              }
+
+              const pedidoTotal = Number(pedido.costo_total) || 0;
+
+              const resumenCompleto =
+                `Pedido #${codigoPedido}\n` +
+                `Tienes esto:\n` +
+                (lineas.length ? lineas.join('\n') : 'Sin platos registrados') +
+                `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
+
+              responseData = {
+                screen: 'ORDER_DETAIL',
+                data: {
+                  pedido_codigo: codigoPedido,
+                  pedido_resumen: resumenCompleto,
+                  pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
+                  pedido_id: String(pedido.id),
+                  pedido_tabla: tabla
+                }
+              };
+            } else {
+              const detallePedido = pedido.pedido || {};
+              const detalleTexto = typeof detallePedido === 'object'
+                ? Object.entries(detallePedido).map(([k, v]) => `${k}: ${v}`).join('\n')
+                : String(detallePedido);
+
+              const pedidoTotal = Number(pedido.costo_total) || 0;
+
+              const resumenCompleto =
+                `Pedido #${codigoPedido}\n` +
+                `Tienes esto (a la carta):\n` +
+                (detalleTexto || 'Sin detalle registrado') +
+                `\n\nTotal: $${pedidoTotal.toLocaleString('es-CO')}`;
+
+              responseData = {
+                screen: 'ORDER_DETAIL',
+                data: {
+                  pedido_codigo: codigoPedido,
+                  pedido_resumen: resumenCompleto,
+                  pedido_total: `$${pedidoTotal.toLocaleString('es-CO')}`,
+                  pedido_id: String(pedido.id),
+                  pedido_tabla: tabla
+                }
+              };
             }
           }
         }
@@ -1286,34 +1323,26 @@ app.post('/flow', async (req, res) => {
           const motivoCancelacion = decryptedBody.data.motivo_cancelacion || '';
           const codigoPedido = obtenerUltimos4Digitos(userId);
 
-          // Mismo motivo que en menu_selection: "eleccion" puede estar
-          // desactualizado si el cliente navegó a otro menú después de
-          // pedir. En vez de confiar en eleccion, revisamos directamente
-          // cuál de las dos tablas tiene el pedido activo de este cliente.
-          const { data: pedidoMenuDia } = await supabase
-            .from('pedidos')
-            .select('user_id')
-            .eq('user_id', userId)
-            .eq('activa', true)
-            .maybeSingle();
-
-          const tabla = pedidoMenuDia ? 'pedidos' : 'pedidos_platos_especiales';
+          // Ya NO se ubica el pedido por activa=true (puede haber varios):
+          // el pedido puntual a cancelar viene identificado por pedido_id +
+          // pedido_tabla, que arrastramos desde la pantalla SELECT_ORDER.
+          const tabla = decryptedBody.data.pedido_tabla;
+          const pedidoId = decryptedBody.data.pedido_id;
 
           try {
             // Ya no borramos la fila: solo marcamos el pedido como cancelado.
             // Así queda historial de qué se pidió y por qué se canceló.
-            // Filtramos por activa=true para tocar SOLO el pedido en curso
-            // (user_id ya no es único, puede haber pedidos viejos del mismo
-            // cliente). También marcamos activa=false: un pedido cancelado
-            // ya no es "el pedido actual" para futuras consultas.
+            // Filtramos por id (y por user_id, para que nadie pueda cancelar
+            // un pedido que no es suyo) en vez de por activa=true, ya que
+            // ahora puede haber varios pedidos del mismo cliente a la vez.
             await supabase
               .from(tabla)
               .update({
                 estado: 'cancelado',
                 activa: false
               })
-              .eq('user_id', userId)
-              .eq('activa', true);
+              .eq('id', pedidoId)
+              .eq('user_id', userId);
 
             // Igual que arriba: filtramos por activa=true para resetear
             // SOLO la sesión en curso del cliente, no una vieja.
