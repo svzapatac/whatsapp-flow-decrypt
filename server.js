@@ -287,10 +287,14 @@ async function notificarCancelacion(numeroDestino, codigoPedido, motivo) {
   }
 }
 
-// Busca en Google Calendar el próximo evento (dentro de los próximos 90 días)
-// cuyo título termine en "Codigo:XXXX" con el código dado.
-async function buscarReservaPorCodigo(codigo) {
-  if (!codigo || codigo.length < 4) return null;
+// Busca en Google Calendar las próximas reservas (dentro de los próximos 90
+// días) cuyo título termine en "Codigo:XXXX" con el código dado. Antes solo
+// devolvía la primera (con .find()), pero un mismo cliente puede tener más
+// de una reserva vigente -- ahora devuelve hasta "maxResultados", en orden
+// cronológico (la más próxima primero), para que el cliente elija cuál
+// gestionar.
+async function buscarReservasPorCodigo(codigo, maxResultados = 3) {
+  if (!codigo || codigo.length < 4) return [];
 
   const ahora = new Date();
   const limite = new Date(ahora.getTime() + 90 * 24 * 60 * 60 * 1000);
@@ -307,24 +311,27 @@ async function buscarReservaPorCodigo(codigo) {
   });
 
   const regexCodigo = new RegExp(`Codigo:${codigo}$`);
-  const encontrado = (events.data.items || []).find(ev => regexCodigo.test(ev.summary || ''));
+  const encontrados = (events.data.items || [])
+    .filter(ev => regexCodigo.test(ev.summary || ''))
+    .slice(0, maxResultados);
 
-  if (!encontrado) return null;
+  return encontrados.map(encontrado => {
+    const inicio = new Date(encontrado.start.dateTime || encontrado.start.date);
+    const fin = new Date(encontrado.end.dateTime || encontrado.end.date);
+    const { fecha, hora } = obtenerFechaHoraBogota(inicio);
 
-  const inicio = new Date(encontrado.start.dateTime || encontrado.start.date);
-  const fin = new Date(encontrado.end.dateTime || encontrado.end.date);
-  const { fecha, hora } = obtenerFechaHoraBogota(inicio);
-
-  return {
-    event_id: encontrado.id,
-    titulo: encontrado.summary,
-    fecha,
-    fecha_legible: inicio.toLocaleDateString('es-CO', { timeZone: ZONA_HORARIA, weekday: 'long', day: 'numeric', month: 'long' }),
-    hora,
-    hora_legible: inicio.toLocaleTimeString('es-CO', { timeZone: ZONA_HORARIA, hour: 'numeric', minute: '2-digit', hour12: true }),
-    duracion_ms: fin - inicio,
-  };
+    return {
+      event_id: encontrado.id,
+      titulo: encontrado.summary,
+      fecha,
+      fecha_legible: inicio.toLocaleDateString('es-CO', { timeZone: ZONA_HORARIA, weekday: 'long', day: 'numeric', month: 'long' }),
+      hora,
+      hora_legible: inicio.toLocaleTimeString('es-CO', { timeZone: ZONA_HORARIA, hour: 'numeric', minute: '2-digit', hour12: true }),
+      duracion_ms: fin - inicio,
+    };
+  });
 }
+
 
 // Aplica las reglas de cupo sobre una lista de slots ya generada para un
 // día específico:
@@ -1004,22 +1011,27 @@ app.post('/flow', async (req, res) => {
 
           else if (opcionMenu === 'cambiar_hora' || opcionMenu === 'cancelar_reserva') {
             const codigo = obtenerUltimos4Digitos(userId);
-            const reserva = await buscarReservaPorCodigo(codigo);
+            const reservas = await buscarReservasPorCodigo(codigo);
 
-            if (!reserva) {
+            if (reservas.length === 0) {
               responseData = {
                 screen: 'NO_SE_ENCONTRO_RESERVA',
                 data: { opcion_menu: opcionMenu }
               };
             } else {
-              const screenDestino = opcionMenu === 'cancelar_reserva' ? 'CONFIRMAR_CANCELACION' : 'CONFIRMAR_REUBICACION';
-              const resumenReserva = `Encontramos tu reserva: ${reserva.titulo.replace(/Codigo:\d+$/, '').trim()}, para el ${reserva.fecha_legible} a las ${reserva.hora_legible}.`;
+              // Ya no asumimos que solo hay una reserva vigente: mostramos
+              // las que se encontraron (hasta 3) para que el cliente elija
+              // cuál quiere gestionar, incluso si solo hay una.
+              const opcionesReservas = reservas.map(r => ({
+                id: r.event_id,
+                title: `${r.titulo.replace(/Codigo:\d+$/, '').trim()} · ${r.fecha_legible} ${r.hora_legible}`
+              }));
 
               responseData = {
-                screen: screenDestino,
+                screen: 'SELECT_RESERVA',
                 data: {
-                  event_id: reserva.event_id,
-                  resumen_reserva: resumenReserva
+                  opcion_menu: opcionMenu,
+                  opciones_reservas: opcionesReservas
                 }
               };
             }
@@ -1034,23 +1046,55 @@ app.post('/flow', async (req, res) => {
           const telefono = decryptedBody.data.telefono;
           const opcionMenu = decryptedBody.data.opcion_menu;
           const codigo = obtenerUltimos4Digitos(telefono);
-          const reserva = await buscarReservaPorCodigo(codigo);
+          const reservas = await buscarReservasPorCodigo(codigo);
 
-          if (!reserva) {
+          if (reservas.length === 0) {
             responseData = {
               screen: 'NO_SE_ENCONTRO_RESERVA',
               data: { opcion_menu: opcionMenu }
             };
           } else {
+            const opcionesReservas = reservas.map(r => ({
+              id: r.event_id,
+              title: `${r.titulo.replace(/Codigo:\d+$/, '').trim()} · ${r.fecha_legible} ${r.hora_legible}`
+            }));
+
+            responseData = {
+              screen: 'SELECT_RESERVA',
+              data: {
+                opcion_menu: opcionMenu,
+                opciones_reservas: opcionesReservas
+              }
+            };
+          }
+        }
+
+        else if (trigger === 'seleccionar_reserva_gestionar') {
+          const opcionMenu = decryptedBody.data.opcion_menu;
+          const eventId = decryptedBody.data.reserva_seleccionada;
+
+          try {
+            const evento = await calendar.events.get({ calendarId: CALENDAR_ID, eventId });
+            const inicio = new Date(evento.data.start.dateTime || evento.data.start.date);
+            const fechaLegible = inicio.toLocaleDateString('es-CO', { timeZone: ZONA_HORARIA, weekday: 'long', day: 'numeric', month: 'long' });
+            const horaLegible = inicio.toLocaleTimeString('es-CO', { timeZone: ZONA_HORARIA, hour: 'numeric', minute: '2-digit', hour12: true });
+            const tituloLimpio = (evento.data.summary || '').replace(/Codigo:\d+$/, '').trim();
+            const resumenReserva = `Encontramos tu reserva: ${tituloLimpio}, para el ${fechaLegible} a las ${horaLegible}.`;
+
             const screenDestino = opcionMenu === 'cancelar_reserva' ? 'CONFIRMAR_CANCELACION' : 'CONFIRMAR_REUBICACION';
-            const resumenReserva = `Encontramos tu reserva: ${reserva.titulo.replace(/Codigo:\d+$/, '').trim()}, para el ${reserva.fecha_legible} a las ${reserva.hora_legible}.`;
 
             responseData = {
               screen: screenDestino,
               data: {
-                event_id: reserva.event_id,
+                event_id: eventId,
                 resumen_reserva: resumenReserva
               }
+            };
+          } catch (err) {
+            console.error('Error obteniendo la reserva seleccionada:', err.message);
+            responseData = {
+              screen: 'NO_SE_ENCONTRO_RESERVA',
+              data: { opcion_menu: opcionMenu }
             };
           }
         }
