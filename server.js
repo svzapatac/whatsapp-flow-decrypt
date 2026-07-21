@@ -1495,6 +1495,144 @@ app.post('/flow', async (req, res) => {
           };
         }
 
+        // ==================== ENTRADAS -> CÁLCULO DE AJUSTE ====================
+        // Se dispara cuando el cliente presiona "Continuar" en la pantalla
+        // ENTRADAS. Revisa en menu_diario si cada plato ya incluye entrada
+        // (menu_1_sopa / menu_2_sopa = false) o si el cliente debe escoger
+        // una aparte (true), y compara contra las entradas que pidió.
+        else if (trigger === 'calcular_ajuste_entradas') {
+          const plato1 = decryptedBody.data.plato1 || '';
+          const plato2 = decryptedBody.data.plato2 || '';
+          const comentariosPlatos = decryptedBody.data.comentarios_platos || '';
+          const sopa = decryptedBody.data.sopa || '';
+          const arroz = decryptedBody.data.arroz || '';
+          const fruta = decryptedBody.data.fruta || '';
+
+          const cantPlato1 = parseInt(plato1, 10) || 0;
+          const cantPlato2 = parseInt(plato2, 10) || 0;
+          const cantSopa = parseInt(sopa, 10) || 0;
+          const cantArroz = parseInt(arroz, 10) || 0;
+          const cantFruta = parseInt(fruta, 10) || 0;
+
+          const { data: menu } = await supabase
+            .from('menu_diario')
+            .select('*')
+            .eq('activo', true)
+            .maybeSingle();
+
+          // menu_1_sopa / menu_2_sopa en TRUE significa que ESE plato NO
+          // trae entrada incluida (el cliente debe escoger una aparte).
+          // En FALSE la entrada ya viene incluida en el plato.
+          const cuposEntrada =
+            (menu?.menu_1_sopa ? cantPlato1 : 0) +
+            (menu?.menu_2_sopa ? cantPlato2 : 0);
+
+          const totalEntradas = cantSopa + cantArroz + cantFruta;
+          const diferencia = totalEntradas - cuposEntrada;
+
+          const COSTO_ENTRADA_EXTRA = 2000;
+          const COSTO_BANDEJA_EXTRA = 13000;
+
+          const datosBase = {
+            plato1,
+            plato2,
+            comentarios_platos: comentariosPlatos,
+            sopa,
+            arroz,
+            fruta
+          };
+
+          if (diferencia === 0) {
+            // Todo cuadra: pasa directo al resumen, sin costo adicional
+            responseData = {
+              screen: 'RESUMEN',
+              data: {
+                ...datosBase,
+                costo_adicional: 0,
+                costo_adicional_texto: ''
+              }
+            };
+          } else if (diferencia > 0) {
+            // Pidió más entradas de las que sus platos necesitan
+            const costo = diferencia * COSTO_ENTRADA_EXTRA;
+            responseData = {
+              screen: 'CONFIRMAR_AJUSTE',
+              data: {
+                ...datosBase,
+                tipo_ajuste: 'entrada_extra',
+                costo_adicional: costo,
+                mensaje_ajuste: `Estás pidiendo ${diferencia} entrada${diferencia > 1 ? 's' : ''} de más. Esto tiene un costo adicional de $${costo.toLocaleString('es-CO')}.`,
+                opciones_ajuste: [
+                  { id: 'continuar', title: 'Continuar con el costo adicional' },
+                  { id: 'volver', title: 'Volver a ajustar mi pedido' }
+                ]
+              }
+            };
+          } else {
+            // Le faltan entradas para completar sus almuerzos
+            const faltan = Math.abs(diferencia);
+            const costo = faltan * COSTO_BANDEJA_EXTRA;
+            responseData = {
+              screen: 'CONFIRMAR_AJUSTE',
+              data: {
+                ...datosBase,
+                tipo_ajuste: 'bandeja_faltante',
+                costo_adicional: costo,
+                mensaje_ajuste: `Te falta${faltan > 1 ? 'n' : ''} ${faltan} entrada${faltan > 1 ? 's' : ''} para completar tu almuerzo. Si continúas sin agregarla${faltan > 1 ? 's' : ''}, se cobrará una bandeja adicional de $${costo.toLocaleString('es-CO')}.`,
+                opciones_ajuste: [
+                  { id: 'agregar', title: 'Agregar la entrada faltante' },
+                  { id: 'continuar', title: `Continuar y pagar $${costo.toLocaleString('es-CO')} de más` }
+                ]
+              }
+            };
+          }
+        }
+
+        // ==================== CONFIRMAR_AJUSTE -> DECISIÓN DEL CLIENTE ====================
+        // El cliente ya vio el mensaje de ajuste y eligió una opción:
+        // volver a ENTRADAS a corregir, o continuar aceptando el costo extra.
+        else if (trigger === 'resolver_ajuste_pedido') {
+          const decision = decryptedBody.data.decision_ajuste || '';
+          const plato1 = decryptedBody.data.plato1 || '';
+          const plato2 = decryptedBody.data.plato2 || '';
+          const comentariosPlatos = decryptedBody.data.comentarios_platos || '';
+          const sopa = decryptedBody.data.sopa || '';
+          const arroz = decryptedBody.data.arroz || '';
+          const fruta = decryptedBody.data.fruta || '';
+          const costoAdicional = decryptedBody.data.costo_adicional || 0;
+
+          if (decision === 'agregar' || decision === 'volver') {
+            // Vuelve a ENTRADAS para que agregue/ajuste la entrada faltante
+            // o quite la que le sobra. Se conservan plato1/plato2/comentarios.
+            responseData = {
+              screen: 'ENTRADAS',
+              data: {
+                plato1,
+                plato2,
+                comentarios_platos: comentariosPlatos
+              }
+            };
+          } else {
+            // Continúa aceptando el costo adicional
+            const costoNum = parseInt(costoAdicional, 10) || 0;
+            responseData = {
+              screen: 'RESUMEN',
+              data: {
+                plato1,
+                plato2,
+                sopa,
+                arroz,
+                fruta,
+                comentarios_platos: comentariosPlatos,
+                costo_adicional: costoNum,
+                costo_adicional_texto: costoNum > 0
+                  ? `⚠️ Se incluyó un costo adicional de $${costoNum.toLocaleString('es-CO')} en tu pedido.`
+                  : ''
+              }
+            };
+          }
+        }
+
         else {
           responseData = { error: 'Trigger desconocido: ' + trigger };
         }
