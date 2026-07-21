@@ -1752,21 +1752,6 @@ app.get('/', (req, res) => {
   res.json({ status: 'ok', service: 'whatsapp-flow-server' });
 });
 
-// ==================== TEMPORAL: OBTENER CLAVE PÚBLICA ====================
-// Deriva la clave pública a partir de PRIVATE_KEY_B64 (ya cargada en Render)
-// para registrarla en Meta. Solo expone la clave PÚBLICA (no es secreta).
-// BORRAR ESTA RUTA una vez que copies la clave y la registres en Meta.
-app.get('/clave-publica-temporal', (req, res) => {
-  try {
-    const keyObject = crypto.createPrivateKey(PRIVATE_KEY);
-    const publicKeyObject = crypto.createPublicKey(keyObject);
-    const publicKeyPem = publicKeyObject.export({ type: 'spki', format: 'pem' });
-    res.type('text/plain').send(publicKeyPem);
-  } catch (err) {
-    res.status(500).type('text/plain').send('Error derivando la clave: ' + err.message);
-  }
-});
-
 // ==================== ENDPOINT SIMPLE PARA N8N (sin cifrado) ====================
 // n8n llama esto DESPUÉS de que el cliente confirma su pedido de domicilio,
 // para resolver la dirección del colegio a partir del nombre que escribió.
