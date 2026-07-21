@@ -1605,17 +1605,21 @@ app.post('/flow', async (req, res) => {
           if (decision === 'agregar' || decision === 'volver') {
             // Va a ENTRADAS_AJUSTE (no a ENTRADAS) para respetar el
             // routing_model de Meta, que no permite rutas hacia atrás.
-            // Se prellenan sopa/arroz/fruta con lo que ya había pedido,
-            // así el cliente solo ajusta la diferencia.
+            // TextInput no admite pre-llenado (init-value no es válido ahí),
+            // así que en vez de rellenar los campos, se le muestra al
+            // cliente cuánto había pedido en un texto informativo.
+            const cantSopaPrev = parseInt(sopa, 10) || 0;
+            const cantArrozPrev = parseInt(arroz, 10) || 0;
+            const cantFrutaPrev = parseInt(fruta, 10) || 0;
+            const resumenActual = `Habías pedido: 🥣 Sopa: ${cantSopaPrev} · 🍮 Arroz con leche: ${cantArrozPrev} · 🍎 Fruta: ${cantFrutaPrev}`;
+
             responseData = {
               screen: 'ENTRADAS_AJUSTE',
               data: {
                 plato1,
                 plato2,
                 comentarios_platos: comentariosPlatos,
-                sopa,
-                arroz,
-                fruta
+                resumen_actual_texto: resumenActual
               }
             };
           } else {
