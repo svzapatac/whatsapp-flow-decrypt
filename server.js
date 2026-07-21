@@ -1549,7 +1549,8 @@ app.post('/flow', async (req, res) => {
               data: {
                 ...datosBase,
                 costo_adicional: 0,
-                costo_adicional_texto: ''
+                costo_adicional_texto: '',
+                mostrar_costo_adicional: false
               }
             };
           } else if (diferencia > 0) {
@@ -1627,7 +1628,8 @@ app.post('/flow', async (req, res) => {
                 costo_adicional: costoNum,
                 costo_adicional_texto: costoNum > 0
                   ? `⚠️ Se incluyó un costo adicional de $${costoNum.toLocaleString('es-CO')} en tu pedido.`
-                  : ''
+                  : '',
+                mostrar_costo_adicional: costoNum > 0
               }
             };
           }
