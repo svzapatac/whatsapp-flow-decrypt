@@ -1603,14 +1603,19 @@ app.post('/flow', async (req, res) => {
           const costoAdicional = decryptedBody.data.costo_adicional || 0;
 
           if (decision === 'agregar' || decision === 'volver') {
-            // Vuelve a ENTRADAS para que agregue/ajuste la entrada faltante
-            // o quite la que le sobra. Se conservan plato1/plato2/comentarios.
+            // Va a ENTRADAS_AJUSTE (no a ENTRADAS) para respetar el
+            // routing_model de Meta, que no permite rutas hacia atrás.
+            // Se prellenan sopa/arroz/fruta con lo que ya había pedido,
+            // así el cliente solo ajusta la diferencia.
             responseData = {
-              screen: 'ENTRADAS',
+              screen: 'ENTRADAS_AJUSTE',
               data: {
                 plato1,
                 plato2,
-                comentarios_platos: comentariosPlatos
+                comentarios_platos: comentariosPlatos,
+                sopa,
+                arroz,
+                fruta
               }
             };
           } else {
@@ -1633,6 +1638,68 @@ app.post('/flow', async (req, res) => {
               }
             };
           }
+        }
+
+        // ==================== ENTRADAS_AJUSTE -> RECÁLCULO FINAL ====================
+        // Segunda pasada tras corregir cantidades. Ya no vuelve a preguntar
+        // (el routing_model de Meta no permite ciclos): si sigue habiendo
+        // diferencia, se aplica el costo correspondiente y se avanza a RESUMEN.
+        else if (trigger === 'recalcular_ajuste_entradas') {
+          const plato1 = decryptedBody.data.plato1 || '';
+          const plato2 = decryptedBody.data.plato2 || '';
+          const comentariosPlatos = decryptedBody.data.comentarios_platos || '';
+          const sopa = decryptedBody.data.sopa || '';
+          const arroz = decryptedBody.data.arroz || '';
+          const fruta = decryptedBody.data.fruta || '';
+
+          const cantPlato1 = parseInt(plato1, 10) || 0;
+          const cantPlato2 = parseInt(plato2, 10) || 0;
+          const cantSopa = parseInt(sopa, 10) || 0;
+          const cantArroz = parseInt(arroz, 10) || 0;
+          const cantFruta = parseInt(fruta, 10) || 0;
+
+          const { data: menu } = await supabase
+            .from('menu_diario')
+            .select('*')
+            .eq('activo', true)
+            .maybeSingle();
+
+          const cuposEntrada =
+            (menu?.menu_1_sopa ? cantPlato1 : 0) +
+            (menu?.menu_2_sopa ? cantPlato2 : 0);
+
+          const totalEntradas = cantSopa + cantArroz + cantFruta;
+          const diferencia = totalEntradas - cuposEntrada;
+
+          const COSTO_ENTRADA_EXTRA = 2000;
+          const COSTO_BANDEJA_EXTRA = 13000;
+
+          let costoNum = 0;
+          let textoCosto = '';
+
+          if (diferencia > 0) {
+            costoNum = diferencia * COSTO_ENTRADA_EXTRA;
+            textoCosto = `⚠️ Tenías ${diferencia} entrada${diferencia > 1 ? 's' : ''} de más, se incluyó un costo adicional de $${costoNum.toLocaleString('es-CO')}.`;
+          } else if (diferencia < 0) {
+            const faltan = Math.abs(diferencia);
+            costoNum = faltan * COSTO_BANDEJA_EXTRA;
+            textoCosto = `⚠️ Aún falta${faltan > 1 ? 'n' : ''} ${faltan} entrada${faltan > 1 ? 's' : ''}, se incluyó una bandeja adicional por $${costoNum.toLocaleString('es-CO')}.`;
+          }
+
+          responseData = {
+            screen: 'RESUMEN',
+            data: {
+              plato1,
+              plato2,
+              sopa,
+              arroz,
+              fruta,
+              comentarios_platos: comentariosPlatos,
+              costo_adicional: costoNum,
+              costo_adicional_texto: textoCosto,
+              mostrar_costo_adicional: costoNum > 0
+            }
+          };
         }
 
         else {
