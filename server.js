@@ -1564,7 +1564,7 @@ app.post('/flow', async (req, res) => {
                 costo_adicional: costo,
                 mensaje_ajuste: `Estás pidiendo ${diferencia} entrada${diferencia > 1 ? 's' : ''} de más. Esto tiene un costo adicional de $${costo.toLocaleString('es-CO')}.`,
                 opciones_ajuste: [
-                  { id: 'continuar', title: 'Continuar con el costo adicional' },
+                  { id: 'continuar', title: `Continuar (+$${costo.toLocaleString('es-CO')})` },
                   { id: 'volver', title: 'Volver a ajustar mi pedido' }
                 ]
               }
@@ -1582,7 +1582,7 @@ app.post('/flow', async (req, res) => {
                 mensaje_ajuste: `Te falta${faltan > 1 ? 'n' : ''} ${faltan} entrada${faltan > 1 ? 's' : ''} para completar tu almuerzo. Si continúas sin agregarla${faltan > 1 ? 's' : ''}, se cobrará una bandeja adicional de $${costo.toLocaleString('es-CO')}.`,
                 opciones_ajuste: [
                   { id: 'agregar', title: 'Agregar la entrada faltante' },
-                  { id: 'continuar', title: `Continuar y pagar $${costo.toLocaleString('es-CO')} de más` }
+                  { id: 'continuar', title: `Continuar (+$${costo.toLocaleString('es-CO')})` }
                 ]
               }
             };
